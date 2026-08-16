@@ -2,7 +2,7 @@
 """
 NNI-Remake Dashboard — zero-dependency web UI (Python standard library only).
 
-Serves the NNI-Remake repo data (proposals, verification, smoke tests, MNIST
+Serves the NNI-Remake repo data (proposals, verification, lifecycle status, MNIST
 results) as a read-only dashboard. Binds to 0.0.0.0:6123 so any machine on the
 same LAN can open it at http://<this-host-ip>:6123.
 
@@ -66,9 +66,9 @@ def status_color(status):
     if isinstance(status, bool):
         return "ok" if status else "bad"
     s = (status or "").lower()
-    if s in ("ok", "tested", "pass", "above_chance", "true"):
+    if s in ("ok", "tested", "pass", "above_chance", "true", "compiles", "trained"):
         return "ok"
-    if s in ("fail", "error", "false", "untested", "below_chance"):
+    if s in ("fail", "error", "false", "untested", "below_chance", "fails"):
         return "bad"
     if s in ("warn", "proposed", "approved"):
         return "warn"
@@ -184,7 +184,7 @@ def build_nav():
     base_links = [
         ("/proposals", "Proposals"),
         ("/verification", "Verification"),
-        ("/smoke", "Smoke Tests"),
+        ("/smoke", "Lifecycle"),
         ("/models", "All models"),
     ]
     items = "".join(f"<a href='{href}'>{esc(label)}</a>"
@@ -236,12 +236,11 @@ def proposals_table(records, real=None):
             f"<td>{esc(model)}</td>"
             f"<td>{esc(dataset)}</td>"
             f"<td>{badge(_test_status(p, real))}</td>"
-            f"<td>{badge(p.get('compile_status'))}</td>"
             f"</tr>"
         )
     return (
         "<table><thead><tr><th>ID</th><th>Family</th><th>Model</th>"
-        "<th>Dataset</th><th>Status</th><th>Compile</th></tr></thead><tbody>"
+        "<th>Dataset</th><th>Status</th></tr></thead><tbody>"
         + "".join(rows) + "</tbody></table>"
     )
 
@@ -397,7 +396,6 @@ def pcoord_chart(rows, dims, fixed_max=None, palette=None, col_w=90,
 def page_index():
     proposals = load_jsonl("proposals.jsonl")
     verify = load_jsonl("proposals_verification.jsonl")
-    smoke = load_jsonl("pipeline_smoke_results.jsonl")
     mnist = [r for r in load_jsonl("tests/results.jsonl") if r.get("declared_dataset") == "mnist"]
 
     fams = sorted({p.get("task_family") for p in proposals})
@@ -405,7 +403,10 @@ def page_index():
     v_ok = sum(1 for v in verify if (v.get("status") or "").lower() == "ok")
     v_warn = sum(1 for v in verify if (v.get("status") or "").lower() == "warn")
     v_fail = sum(1 for v in verify if (v.get("status") or "").lower() == "fail")
-    s_ok = sum(1 for s in smoke if (s.get("status") or "").lower() == "ok")
+    n_compiles = sum(1 for p in proposals if p.get("status") == "compiles")
+    n_fails = sum(1 for p in proposals if p.get("status") == "fails")
+    n_trained = sum(1 for p in proposals if p.get("status") == "trained")
+    n_proposed = sum(1 for p in proposals if p.get("status") == "proposed")
 
     fam_rows = []
     for f in fams:
@@ -427,7 +428,10 @@ def page_index():
       <div class="card"><div class="n" style="color:var(--ok)">{v_ok}</div><div class="l">Verify OK</div></div>
       <div class="card"><div class="n" style="color:var(--warn)">{v_warn}</div><div class="l">Verify Warn</div></div>
       <div class="card"><div class="n" style="color:var(--bad)">{v_fail}</div><div class="l">Verify Fail</div></div>
-      <div class="card"><div class="n" style="color:var(--ok)">{s_ok}</div><div class="l">Smoke OK</div></div>
+      <div class="card"><div class="n" style="color:var(--warn)">{n_proposed}</div><div class="l">Proposed</div></div>
+      <div class="card"><div class="n" style="color:var(--ok)">{n_compiles}</div><div class="l">Compiles</div></div>
+      <div class="card"><div class="n" style="color:var(--bad)">{n_fails}</div><div class="l">Fails</div></div>
+      <div class="card"><div class="n" style="color:var(--ok)">{n_trained}</div><div class="l">Trained</div></div>
       <div class="card"><div class="n">{len(mnist)}</div><div class="l">MNIST tested</div></div>
     </div>
     <h2>Task families</h2>
@@ -454,7 +458,6 @@ def page_proposal(pid):
         return "Not found", f"<h2>404</h2><p class='muted'>proposal {esc(pid)} not found</p>"
 
     verify = index_by(load_jsonl("proposals_verification.jsonl"), "id")
-    smoke = index_by(load_jsonl("pipeline_smoke_results.jsonl"), "id")
     real = index_by(load_jsonl("tests/results.jsonl"), "id")
     rl = real.get(rec.get("id")) or {}
 
@@ -493,29 +496,12 @@ def page_proposal(pid):
         v_html = (f"<h2>Verification</h2>{badge(v.get('status'))}"
                   f"<ul class='checks'>{items}</ul>")
 
-    s = smoke.get(pid)
-    s_html = ""
-    if s:
-        s_html = (
-            "<h2>Smoke test</h2>"
-            f"<div class='detail-grid'>"
-            f"<div class='k'>status</div><div>{badge(s.get('status'))}</div>"
-            f"<div class='k'>params</div><div>{esc(s.get('params'))}</div>"
-            f"<div class='k'>out_shape</div><div>{esc(s.get('out_shape'))}</div>"
-            f"<div class='k'>grads_finite</div><div>{esc(s.get('grads_finite'))}</div>"
-            f"<div class='k'>test_out_shape</div><div>{esc(s.get('test_out_shape'))}</div>"
-            f"<div class='k'>predict</div><div>{esc(s.get('predict'))}</div>"
-            f"<div class='k'>message</div><div>{esc(s.get('message'))}</div>"
-            f"</div>"
-        )
-
     body = f"""
     <h2>{esc(rec.get('id'))}</h2>
     <div class="detail-grid">
       <div class="k">family</div><div>{esc(rec.get('task_family'))}</div>
       <div class="k">lifecycle</div><div>{badge(rec.get('status'))}</div>
       <div class="k">test status</div><div>{badge(rl.get('status') or 'untested')}</div>
-      <div class="k">compile</div><div>{badge(rec.get('compile_status'))}</div>
       <div class="k">created</div><div>{esc(rec.get('created'))}</div>
     </div>
     <h2>Spec</h2>
@@ -526,7 +512,6 @@ def page_proposal(pid):
     <h2>Citations</h2>
     {cite_html}
     {v_html}
-    {s_html}
     """
     return rec.get("id", "Proposal"), body
 
@@ -560,57 +545,33 @@ def page_verification():
 
 
 def page_smoke():
-    smoke = load_jsonl("pipeline_smoke_results.jsonl")
+    """Compile & lifecycle view: one row per proposal showing its single
+    status from proposals.jsonl (proposed / compiles / fails / trained).
+    Replaces the old pipeline_smoke_results.jsonl smoke page."""
+    proposals = load_jsonl("proposals.jsonl")
 
-    def _loss(r):
-        m = re.search(r"loss=([0-9.]+)", r.get("message", "") or "")
-        return float(m.group(1)) if m else None
-
-    def _out_classes(r):
-        s = r.get("out_shape") or []
-        return s[1] if isinstance(s, list) and len(s) > 1 else None
-
-    dims = [
-        ("grads finite", "grads finite", lambda r: r.get("grads_finite")),
-        ("out classes", "out classes", _out_classes),
-        ("loss", "loss", _loss),
-        ("params", "params", lambda r: r.get("params")),
-        ("status", "status", lambda r: r.get("status")),
-        ("task family", "task family", lambda r: r.get("task_family")),
-    ]
-    families = sorted({r.get("task_family") for r in smoke})
-    fam_palette = ["#58a6ff", "#3fb950", "#d29922", "#bc8cff", "#f778ba",
-                   "#56d4dd", "#ff7b72", "#e3b341", "#a371f7"]
-    fam_color = {f: fam_palette[i % len(fam_palette)] for i, f in enumerate(families)}
-
-    chart, vlegend, catlegend = pcoord_chart(
-        smoke, dims, col_w=90,
-        color_by=lambda r: fam_color.get(r.get("task_family"), "#8b949e"),
-        note="One line per proposal; colour = task family. Columns alphabetical. "
-             "'params' spans 42 to 4.8M (most lines sit low), 'loss' is parsed "
-             "from the smoke message. Source: pipeline/smoke_test.py.",
-    )
+    order = {"proposed": 0, "compiles": 1, "fails": 2, "trained": 3}
+    proposals = sorted(proposals, key=lambda p: (order.get(p.get("status"), 9),
+                                                 p.get("id", "")))
 
     rows = []
-    for s in smoke:
-        pid = esc(s.get("id"))
+    for p in proposals:
+        pid = esc(p.get("id"))
         rows.append(
             f"<tr><td><a href='/proposal/{pid}'>{pid}</a></td>"
-            f"<td>{esc(s.get('task_family'))}</td>"
-            f"<td>{esc(s.get('params'))}</td>"
-            f"<td>{esc(s.get('out_shape'))}</td>"
-            f"<td>{esc(s.get('grads_finite'))}</td>"
-            f"<td>{esc(s.get('test_out_shape'))}</td>"
-            f"<td>{esc(s.get('predict'))}</td>"
-            f"<td>{badge(s.get('status'))}</td>"
-            f"<td class='muted'>{esc(s.get('message'))}</td></tr>"
+            f"<td>{esc(p.get('task_family'))}</td>"
+            f"<td>{esc((p.get('spec') or {}).get('dataset'))}</td>"
+            f"<td>{badge(p.get('status'))}</td></tr>"
         )
-    body = ("<h2>Smoke-test results</h2>" + vlegend + chart + catlegend
-            + "<table><thead><tr><th>ID</th><th>Family</th>"
-            "<th>Params</th><th>Out</th><th>Grads</th><th>Test out</th><th>Predict</th>"
-            "<th>Status</th><th>Message</th></tr></thead><tbody>"
+    body = ("<h2>Compile &amp; lifecycle status</h2>"
+            "<p class='desc'>Single lifecycle status per proposal, written back "
+            "by compile_test.py (build + 2-sample train) and train.py. "
+            "proposed &rarr; compiles &rarr; trained; fails if the compile "
+            "gate errors.</p>"
+            "<table><thead><tr><th>ID</th><th>Family</th><th>Dataset</th>"
+            "<th>Status</th></tr></thead><tbody>"
             + "".join(rows) + "</tbody></table>")
-    return "Smoke Tests", body
+    return "Compile & Lifecycle", body
 
 
 def page_mnist():
@@ -733,7 +694,6 @@ def page_models():
     """All proposals on one parallel-coordinates chart, coloured by model.
     A dropdown filters the chart to a single model (client-side)."""
     proposals = load_jsonl("proposals.jsonl")
-    smoke = index_by(load_jsonl("pipeline_smoke_results.jsonl"), "id")
     real = index_by(load_jsonl("tests/results.jsonl"), "id")
 
     def model_of(p):
@@ -746,9 +706,8 @@ def page_models():
         return (p.get("spec") or {}).get("task_type") or "-"
 
     def params_of(p):
-        sm = smoke.get(p.get("id")) or {}
         rl = real.get(p.get("id")) or {}
-        return rl.get("param_count") if rl.get("param_count") is not None else sm.get("params")
+        return rl.get("param_count")
 
     def valacc_of(p):
         rl = real.get(p.get("id")) or {}
@@ -776,7 +735,7 @@ def page_models():
         note="One line per proposal, coloured by model. Use the dropdown to "
              "show a single model. Architecture choices and measured metrics "
              "(where a real-data or MNIST run exists) are the columns. "
-             "Source: proposals.jsonl + smoke / real / MNIST results.",
+             "Source: proposals.jsonl + real / MNIST results.",
     )
 
     models = sorted({r["model"] for r in rows})
@@ -815,7 +774,6 @@ def page_family(fam):
                  key=lambda p: p.get("id", ""))
     if not fps:
         return "Not found", f"<h2>404</h2><p class='muted'>family {esc(fam)} not found</p>"
-    smoke = index_by(load_jsonl("pipeline_smoke_results.jsonl"), "id")
     real = index_by(load_jsonl("tests/results.jsonl"), "id")
 
     desc = TASK_DESC.get(fam, "")
@@ -861,7 +819,6 @@ def page_family(fam):
     for p in fps:
         row = dict(p)
         row["_real"] = real.get(p.get("id")) or {}
-        row["_smoke"] = smoke.get(p.get("id")) or {}
         rows.append(row)
 
     def val_acc(p):
@@ -873,10 +830,7 @@ def page_family(fam):
     def infer_ms(p):
         return p.get("_real", {}).get("inference_ms")
     def param_count(p):
-        pc = p.get("_real", {}).get("param_count")
-        if pc is not None:
-            return pc
-        return p.get("_smoke", {}).get("params")
+        return p.get("_real", {}).get("param_count")
 
     # Same column shape as page_mnist so every family page reads the same way:
     # run-constants (fixed by the shared runner) then measured metrics, plus
@@ -911,35 +865,24 @@ def page_family(fam):
         f"<h2>{esc(fam)} — {len(fps)} proposals</h2>"
         + (f"<p class='desc'>{esc(desc)}</p>" if desc else "")
         + vlegend + chart + catlegend
-        + "<h2>Raw data</h2>" + family_table(fps, smoke, real)
+        + "<h2>Raw data</h2>" + family_table(fps, real)
     )
     return fam, body
 
 
-def family_table(fps, smoke, real):
+def family_table(fps, real):
     """Replicates the MNIST raw-data table layout exactly:
     ID, Family, Dataset, Status, Val acc, Params, Train loss, Val loss,
-    Infer ms, Above chance. For proposals that were real-data tested, the
-    metrics come from tests/results.jsonl (val_acc, train_loss, val_loss,
-    inference_ms, param_count, above_chance). Untested (proposed) rows show
-    only what the smoke compile-gate produced (params) and leave the rest
-    blank."""
+    Infer ms, Above chance. Metrics come from tests/results.jsonl. Untested
+    (proposed) rows leave the measured columns blank."""
     rows = []
     for p in fps:
         pid = esc(p.get("id"))
-        sm = smoke.get(p.get("id")) or {}
         rl = real.get(p.get("id")) or {}
-        # actual dataset name: prefer the real-data result's declared_dataset
-        # (matches /mnist), fall back to the proposal's spec.dataset, then the
-        # smoke modality. Previously read sm.get("modality") which is the data
-        # MODALITY (image/text/timeseries), not the dataset NAME — so every
-        # family table showed "image" instead of "cifar10" etc.
         ds = (rl.get("declared_dataset")
-              or (p.get("spec") or {}).get("dataset")
-              or sm.get("modality") or "")
-        # prefer real results, fall back to smoke
+              or (p.get("spec") or {}).get("dataset") or "")
         val_acc = rl.get("val_acc")
-        params = rl.get("param_count") if rl.get("param_count") is not None else sm.get("params")
+        params = rl.get("param_count")
         train_loss = rl.get("train_loss")
         val_loss = rl.get("val_loss")
         infer_ms = rl.get("inference_ms")
@@ -1057,12 +1000,11 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/summary":
                 proposals = load_jsonl("proposals.jsonl")
                 verify = load_jsonl("proposals_verification.jsonl")
-                smoke = load_jsonl("pipeline_smoke_results.jsonl")
                 self._json({
                     "proposals": len(proposals),
                     "families": sorted({p.get("task_family") for p in proposals}),
                     "verify_status": {v.get("id"): v.get("status") for v in verify},
-                    "smoke_status": {s.get("id"): s.get("status") for s in smoke},
+                    "lifecycle_status": {p.get("id"): p.get("status") for p in proposals},
                 })
                 return
             else:

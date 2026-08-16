@@ -17,6 +17,7 @@ TORCHVISION = {
     "mnist":   tv_datasets.MNIST,
     "cifar10": tv_datasets.CIFAR10,
     "cifar100": tv_datasets.CIFAR100,
+    "mnist-cluster": tv_datasets.MNIST,
 }
 
 # Full dataset table, carried over from build_model.DATASETS, with the loader

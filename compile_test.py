@@ -65,7 +65,20 @@ def compile_one(rec):
 
     opt = torch.optim.Adam(model.parameters(), lr=1e-3)
     out = model(x)
-    loss = F.cross_entropy(out, y)
+    # Shape-aware loss for the 2-sample smoke step:
+    #  - 2-D output (B, n_out): standard classification -> cross_entropy.
+    #  - 4-D spatial output (B, n_out, H, W), e.g. a diffusion/conv_out head:
+    #    cross_entropy expects class logits, not a spatial tensor, so compare
+    #    against a one-hot-as-channels target of the same shape via MSE. This
+    #    still exercises the full forward+backward path for the gate.
+    if out.dim() == 2:
+        loss = F.cross_entropy(out, y)
+    elif out.dim() == 4:
+        target = torch.nn.functional.one_hot(y, num_classes=out.shape[1])
+        target = target.permute(0, 3, 1, 2).float().to(device)
+        loss = F.mse_loss(out, target)
+    else:
+        raise ValueError(f"unexpected output rank {out.dim()} for compile gate")
     loss.backward()
     opt.step()
     return True

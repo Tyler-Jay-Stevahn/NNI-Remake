@@ -16,7 +16,7 @@ def get_dataloader(name, batch_size = 32):
     if info["loader"]=="torchvision":
         pass
     elif info["loader"]=="local":
-        if info["loader"] == "Recycling Dataset":
+        if name == "Recycling-Data":
             return recycling_data
         else:
             pass

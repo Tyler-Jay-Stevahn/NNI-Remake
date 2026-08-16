@@ -8,6 +8,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = HERE if os.path.exists(os.path.join(HERE, "proposals.jsonl")) else os.path.dirname(HERE)
 
 recycling_data = os.path.join(ROOT, "data", "Recycling Dataset")
+imagenet_subset_data = os.path.join(ROOT, "data", "ImageNet Subset")
+atari_ale_data = os.path.join(ROOT, "data", "Atari ALE")
 
 # torchvision dataset classes keyed by dataset name. Each is downloaded into
 # ROOT/data on first use (download=True), exactly like MNIST.
@@ -49,13 +51,58 @@ def _image_transforms(shape):
     ])
 
 
+class _StackedFrameFolder(torch.utils.data.Dataset):
+    """Load pre-stacked (C,H,W) tensors from class subfolders.
+
+    Used for Atari ALE where each sample is a stack of 4 frames of shape
+    (4, 84, 84) rather than a single 3-channel PIL image. Expects layout:
+
+        <root>/<class_name>/<file>.npy      (.npy with array shape (4,84,84))
+        <root>/<class_name>/<file>.pt       (torch.save of a (4,84,84) tensor)
+
+    Returns (tensor, class_index). No on-the-fly stacking — the stacks are
+    assumed already prepared on disk.
+    """
+    def __init__(self, root, shape):
+        self.root = root
+        self.shape = shape
+        self.samples = []  # (path, class_idx)
+        self.classes = sorted(
+            d for d in os.listdir(root)
+            if os.path.isdir(os.path.join(root, d))
+        )
+        self.class_to_idx = {c: i for i, c in enumerate(self.classes)}
+        for cls in self.classes:
+            cls_dir = os.path.join(root, cls)
+            for fn in os.listdir(cls_dir):
+                if fn.lower().endswith((".npy", ".pt")):
+                    self.samples.append(
+                        (os.path.join(cls_dir, fn), self.class_to_idx[cls]))
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        path, label = self.samples[idx]
+        if path.lower().endswith(".npy"):
+            import numpy as np
+            arr = np.load(path)
+            tensor = torch.as_tensor(arr, dtype=torch.float32)
+        else:
+            tensor = torch.load(path, weights_only=True)
+        # Defensive: if stored as (H,W,C), move channel to front.
+        if tensor.dim() == 3 and tensor.shape[0] != self.shape[0]:
+            tensor = tensor.permute(2, 0, 1)
+        return tensor, label
+
+
 def get_dataloader(name, batch_size=32):
     """Return (train_loader, val_loader) for the named dataset.
 
     torchvision datasets (mnist, cifar10, cifar100, mnist-cluster) are
     downloaded into ROOT/data on first use. Local image datasets
     (Recycling-Data, imagenet-subset, atari-ale) are loaded from class
-    subfolders via ImageFolder.
+    subfolders under ROOT/data.
     """
     info = DATASETS[name]
     tfm = _image_transforms(info["shape"])
@@ -75,11 +122,15 @@ def get_dataloader(name, batch_size=32):
     elif info["loader"] == "local":
         if name == "Recycling-Data":
             full = tv_datasets.ImageFolder(recycling_data, transform=tfm)
-            n_val = int(0.1 * len(full))
-            train_ds, val_ds = random_split(full, [len(full) - n_val, n_val])
-            return (DataLoader(train_ds, batch_size=batch_size, shuffle=True),
-                    DataLoader(val_ds, batch_size=batch_size, shuffle=False))
+        elif name == "imagenet-subset":
+            full = tv_datasets.ImageFolder(imagenet_subset_data, transform=tfm)
+        elif name == "atari-ale":
+            full = _StackedFrameFolder(atari_ale_data, info["shape"])
         else:
             raise ValueError(f"no local loader for dataset {name!r}")
+        n_val = int(0.1 * len(full))
+        train_ds, val_ds = random_split(full, [len(full) - n_val, n_val])
+        return (DataLoader(train_ds, batch_size=batch_size, shuffle=True),
+                DataLoader(val_ds, batch_size=batch_size, shuffle=False))
 
     raise ValueError(f"unknown loader type {info['loader']!r} for {name!r}")

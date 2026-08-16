@@ -113,7 +113,7 @@ def train(pid, epochs=3, batch_size=32):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("proposal_id", nargs="?", default="Thpo-mnist-M01")
-    ap.add_argument("--epochs", type=int, default=3)
+    ap.add_argument("--epochs", type=int, default=10)
     ap.add_argument("--batch", type=int, default=32)
     args = ap.parse_args()
 

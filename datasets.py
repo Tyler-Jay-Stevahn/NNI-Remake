@@ -31,14 +31,7 @@ DATASETS = {
     "cifar100":         {"modality": "image",      "shape": (3, 32, 32),   "classes": 100, "loader": "torchvision", "name": "CIFAR-100"},
     "imagenet-subset":  {"modality": "image",      "shape": (3, 16, 16),   "classes": 10,  "loader": "local",       "name": "ImageNet Subset"},
     "Recycling-Data":   {"modality": "image",      "shape": (3, 128, 128), "classes": 11,  "loader": "local",       "name": "Recycling Dataset"},
-    "openml-ctr23":     {"modality": "tabular",    "shape": (20,),         "classes": 2,   "loader": "tabular",     "name": "OpenML CTR23"},
-    "speech-commands":  {"modality": "audio-mel",  "shape": (1, 64, 64),   "classes": 12,  "loader": "audio-mel",   "name": "Speech Commands"},
-    "esc50":            {"modality": "audio-wave", "shape": (1, 8000),     "classes": 10,  "loader": "audio-wave", "name": "ESC-50"},
-    "ag-news":          {"modality": "text",       "shape": (64,),         "classes": 4,   "loader": "text",       "name": "AG News",    "vocab": 20000},
-    "imdb":             {"modality": "text",       "shape": (128,),        "classes": 2,   "loader": "text",       "name": "IMDB",       "vocab": 20000},
-    "uci-har":          {"modality": "timeseries", "shape": (9, 128),      "classes": 6,   "loader": "timeseries", "name": "UCI HAR"},
     "mnist-cluster":    {"modality": "image",      "shape": (1, 28, 28),   "classes": 10,  "loader": "torchvision", "name": "MNIST Cluster"},
-    "openml-cluster":   {"modality": "tabular",    "shape": (20,),         "classes": 8,   "loader": "tabular",     "name": "OpenML Cluster"},
     "atari-ale":        {"modality": "image",      "shape": (4, 84, 84),   "classes": 18,  "loader": "local",       "name": "Atari ALE"},
 }
 

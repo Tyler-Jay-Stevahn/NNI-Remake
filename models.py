@@ -4,6 +4,10 @@ desired_height = 128
 desired_width = desired_height
 num_classes = 11
 
+def resize_image(image, label):
+    image = tf.image.resize(image, [desired_height, desired_height])
+    return image, label
+
 def create_broken_model():
     model = tf.keras.Sequential([
         tf.keras.layers.InputLayer(shape=(desired_height, desired_width, 3)), # Input layer matching image size and color channels

@@ -11,10 +11,11 @@ Drops the now-redundant `compile_status` and `approved` keys from every
 record. Idempotent: running it again is a no-op on already-migrated data.
 
 Usage:
-    python3 migrate_status.py            # rewrite proposals.jsonl in place
-    python3 migrate_status.py --dry      # print changes, don't write
+    python3 migrate_status.py
+
+The script prompts: type "dry" to print the changes without writing, or
+press ENTER to rewrite proposals.jsonl in place.
 """
-import argparse
 import json
 import os
 
@@ -45,9 +46,8 @@ def migrate(rec):
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--dry", action="store_true", help="print changes, don't write")
-    args = ap.parse_args()
+    mode = input("Mode [default: write] (type 'dry' to preview only): ").strip().lower()
+    dry = mode == "dry"
 
     with open(SRC, encoding="utf-8") as fh:
         records = [json.loads(line) for line in fh if line.strip()]
@@ -57,7 +57,7 @@ def main():
         s = migrate(rec)
         counts[s] = counts.get(s, 0) + 1
 
-    if args.dry:
+    if dry:
         print("DRY RUN — would write:")
         for k in sorted(counts):
             print(f"  {k}: {counts[k]}")

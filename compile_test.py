@@ -10,10 +10,11 @@ becomes "fails". The status is written back into proposals.jsonl (no
 separate results file). This replaces the old TF smoke-test stage.
 
 Usage:
-    python3 compile_test.py            # process all "proposed" proposals
-    python3 compile_test.py --id X1   # process only proposal X1
+    python3 compile_test.py
+
+The script prompts interactively. Leave the proposal id blank to process all
+"proposed" proposals, or type a specific id to process only that one.
 """
-import argparse
 import json
 import os
 
@@ -82,15 +83,13 @@ def process(rec):
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--id", default=None, help="only process this proposal id")
-    args = ap.parse_args()
-
     records = load_all()
-    if args.id:
-        records = [r for r in records if r.get("id") == args.id]
+
+    pid = input("Proposal id (blank = all 'proposed'): ").strip()
+    if pid:
+        records = [r for r in records if r.get("id") == pid]
         if not records:
-            raise SystemExit(f"proposal {args.id!r} not found")
+            raise SystemExit(f"proposal {pid!r} not found")
 
     changed = []
     for rec in records:

@@ -8,11 +8,11 @@ schema the dashboard already consumes (id, declared_dataset, status, val_acc,
 train_loss, val_loss, inference_ms, param_count, above_chance, test).
 
 Usage:
-    python3 train.py [proposal_id] [--epochs N] [--batch N]
+    python3 train.py
 
-If no proposal_id is given, trains Thpo-mnist-M01.
+The script prompts interactively for the proposal id, number of epochs, and
+batch size. Press ENTER to accept the shown default.
 """
-import argparse
 import json
 import os
 import time
@@ -134,13 +134,29 @@ def _set_status(pid, status):
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("proposal_id", nargs="?", default="Thpo-mnist-M01")
-    ap.add_argument("--epochs", type=int, default=10)
-    ap.add_argument("--batch", type=int, default=32)
-    args = ap.parse_args()
+    # Default id: the first proposal whose status is "compiles"; else the
+    # legacy default. Press ENTER to accept.
+    default_pid = "Thpo-mnist-M01"
+    try:
+        with open(os.path.join(ROOT, "proposals.jsonl"), encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                rec = json.loads(line)
+                if rec.get("status") == "compiles":
+                    default_pid = rec["id"]
+                    break
+    except FileNotFoundError:
+        pass
 
-    res = train(args.proposal_id, epochs=args.epochs, batch_size=args.batch)
+    pid = input(f"Proposal id [default: {default_pid}]: ").strip() or default_pid
+    epochs_s = input("Epochs [default: 10]: ").strip()
+    batch_s = input("Batch size [default: 32]: ").strip()
+    epochs = int(epochs_s) if epochs_s else 10
+    batch_size = int(batch_s) if batch_s else 32
+
+    res = train(pid, epochs=epochs, batch_size=batch_size)
     print("Trained", res["id"], "->", res)
 
 

@@ -1,0 +1,1 @@
+{"id": "Trl-atari-ppo-M05", "task_family": "rl-atari-ppo", "modality": "image", "task_type": "rl_policy", "params": 33204755, "out_shape": [2, 18], "grads_finite": true, "test_out_shape": [2, 18], "predict": [16], "status": "ok", "message": "compiles; 33204755 params; loss=2.9254"}

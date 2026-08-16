@@ -72,9 +72,13 @@ def modality(dataset):
 
 
 def output_size(spec):
-    """Class count, or cluster count for a clustering proposal."""
+    """Class count, cluster count, or vocab size for a text-gen proposal."""
     if spec.get("task_type") == "clustering":
         return int(spec.get("n_clusters", num_classes(spec.get("dataset", ""))))
+    if spec.get("task_type") == "text-gen":
+        # vocab is fixed by the corpus/tokenizer at train time; the proposal
+        # declares it (char-level TinyStories is typically < 256).
+        return int(spec.get("vocab", 256))
     return num_classes(spec.get("dataset", ""))
 
 
@@ -86,7 +90,13 @@ def sample_batch(spec, batch=2):
         x = torch.randint(0, info.get("vocab", 20000), (batch, *shape))
     else:
         x = torch.randn(batch, *shape)
-    y = torch.randint(0, output_size(spec), (batch,))
+    if spec.get("task_type") == "text-gen":
+        # next-token LM: targets are a (B, T) sequence of token ids (the input
+        # shifted by one is applied at train time; here we just need matching
+        # shape for the compile gate's loss).
+        y = torch.randint(0, output_size(spec), (batch, *shape))
+    else:
+        y = torch.randint(0, output_size(spec), (batch,))
     return x, y
 
 
@@ -135,6 +145,33 @@ class SelfAttention1d(nn.Module):
     def forward(self, x):
         s = x.transpose(1, 2)
         a, _ = self.att(s, s, s)
+        return self.norm(s + a).transpose(1, 2)
+
+
+class CausalSelfAttention1d(nn.Module):
+    """Autoregressive (masked) self attention over (B, C, T).
+
+    Used by text-generation models: each position may attend only to itself
+    and earlier positions, never the future. A lower-triangular mask is built
+    per call so variable-length sequences work.
+    """
+
+    def __init__(self, channels, heads=4):
+        super().__init__()
+        while channels % heads and heads > 1:
+            heads -= 1
+        self.heads = heads
+        self.att = nn.MultiheadAttention(channels, heads, batch_first=True)
+        self.norm = nn.LayerNorm(channels)
+
+    def forward(self, x):
+        # x: (B, C, T) -> (B, T, C) for MultiheadAttention
+        s = x.transpose(1, 2)
+        t = s.shape[1]
+        # lower-triangular causal mask, shape (T, T)
+        mask = torch.triu(torch.ones(t, t, device=s.device, dtype=torch.bool),
+                          diagonal=1)
+        a, _ = self.att(s, s, s, attn_mask=mask)
         return self.norm(s + a).transpose(1, 2)
 
 
@@ -381,6 +418,8 @@ def _block1d(block: dict, in_ch: int):
         return mod, mod.out_ch
     if t == "attention1d":
         return SelfAttention1d(in_ch, block.get("heads", 4)), in_ch
+    if t == "causal":
+        return CausalSelfAttention1d(in_ch, block.get("heads", 4)), in_ch
     if t == "layernorm1d":
         return nn.GroupNorm(1, in_ch), in_ch
     if t == "batchnorm1d":
@@ -449,6 +488,14 @@ def _make_head(feat_out: torch.Tensor, spec: dict) -> nn.Module:
             nn.AdaptiveAvgPool2d(1), nn.Flatten(),
             nn.Linear(feat_out.shape[1], 256), nn.ReLU(),
             ActorCriticHead(256, n_out))
+    elif spec.get("head") == "lm_head":
+        # Language-modeling head for text-gen: project each position's
+        # channel vector to a vocab-sized logit, keeping the full (B, T) sequence
+        # so the loss is computed per token (targets are the input shifted by
+        # one). feat_out is (B, C, T); output is (B, n_out, T).
+        if feat_out.dim() != 3:
+            raise ValueError("lm_head requires a 3-D (B, C, T) feature map")
+        return nn.Conv1d(feat_out.shape[1], n_out, 1)
     else:
         layers.append(nn.Linear(dim, n_out))
     return nn.Sequential(*layers)

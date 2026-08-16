@@ -71,7 +71,13 @@ def compile_one(rec):
     #    cross_entropy expects class logits, not a spatial tensor, so compare
     #    against a one-hot-as-channels target of the same shape via MSE. This
     #    still exercises the full forward+backward path for the gate.
+    #  - 3-D output (B, n_out, T), e.g. an lm_head for text-gen: per-token
+    #    logits over a sequence; cross_entropy accepts (B, C, T) with a
+    #    (B, T) target of class indices, so use it directly.
     if out.dim() == 2:
+        loss = F.cross_entropy(out, y)
+    elif out.dim() == 3:
+        # lm_head: out (B, vocab, T), y (B, T) token ids.
         loss = F.cross_entropy(out, y)
     elif out.dim() == 4:
         target = torch.nn.functional.one_hot(y, num_classes=out.shape[1])

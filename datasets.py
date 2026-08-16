@@ -27,6 +27,7 @@ DATASETS = {
     "cifar10":          {"modality": "image",      "shape": (3, 32, 32),   "classes": 10,  "loader": "torchvision", "name": "CIFAR-10"},
     "cifar100":         {"modality": "image",      "shape": (3, 32, 32),   "classes": 100, "loader": "torchvision", "name": "CIFAR-100"},
     "Recycling-Data":   {"modality": "image",      "shape": (3, 128, 128), "classes": 11,  "loader": "local",       "name": "Recycling Dataset"},
+    "tinystories":      {"modality": "text",       "shape": (128,),        "classes": 0,   "loader": "text",        "name": "TinyStories", "seq_len": 128, "vocab": 0},
 }
 
 
@@ -71,4 +72,103 @@ def get_dataloader(name, batch_size=32):
         return (DataLoader(train_ds, batch_size=batch_size, shuffle=True),
                 DataLoader(val_ds, batch_size=batch_size, shuffle=False))
 
+    elif info["loader"] == "text":
+        return get_text_dataloader(name, batch_size=batch_size)
+
     raise ValueError(f"unknown loader type {info['loader']!r} for {name!r}")
+
+
+# ---------------------------------------------------------------------------
+# Text dataset: TinyStories (char-level, next-token targets)
+# ---------------------------------------------------------------------------
+def _tinystories_path():
+    # Accept either a single file or a directory of .txt files.
+    p = os.path.join(ROOT, "data", "tinystories.txt")
+    if os.path.exists(p):
+        return p
+    d = os.path.join(ROOT, "data", "tinystories")
+    if os.path.isdir(d):
+        return d
+    return p  # caller will report the missing file
+
+
+def _load_corpus_text(path):
+    if os.path.isdir(path):
+        chunks = []
+        for fn in sorted(os.listdir(path)):
+            if fn.lower().endswith(".txt"):
+                with open(os.path.join(path, fn), encoding="utf-8",
+                          errors="ignore") as fh:
+                    chunks.append(fh.read())
+        return "\n".join(chunks)
+    with open(path, encoding="utf-8", errors="ignore") as fh:
+        return fh.read()
+
+
+def _build_vocab(text):
+    # Char-level vocab over the corpus, plus <unk>/<pad>.
+    chars = sorted(set(text))
+    vocab = {"<pad>": 0, "<unk>": 1}
+    for i, c in enumerate(chars):
+        vocab[c] = i + 2
+    return vocab
+
+
+def _tokenize(text, vocab, seq_len):
+    """Chunk the corpus into (input, target) pairs for next-token LM training.
+
+    Each sample is a fixed-length window; target is the window shifted by one
+    (predict the next character). The final window drops the last char so
+    input/target lengths match.
+    """
+    unk = vocab["<unk>"]
+    ids = [vocab.get(c, unk) for c in text]
+    samples = []
+    for i in range(0, len(ids) - seq_len, seq_len):
+        window = ids[i:i + seq_len + 1]
+        if len(window) < seq_len + 1:
+            continue
+        x = window[:-1]
+        y = window[1:]
+        samples.append((x, y))
+    return samples
+
+
+class _TextDataset(torch.utils.data.Dataset):
+    def __init__(self, pairs):
+        self.pairs = pairs
+
+    def __len__(self):
+        return len(self.pairs)
+
+    def __getitem__(self, idx):
+        x, y = self.pairs[idx]
+        return torch.tensor(x, dtype=torch.long), torch.tensor(y, dtype=torch.long)
+
+
+def get_text_dataloader(name, batch_size=32):
+    """Return (train_loader, val_loader) for a text dataset (next-token LM).
+
+    Loads the corpus from data/<name>.txt (or data/<name>/), builds a
+    char-level vocab, and yields (input_ids, target_ids) where target is the
+    input shifted by one. Intended for a `text-gen` task; the builder's LM
+    head consumes (x, y) directly.
+    """
+    info = DATASETS[name]
+    seq_len = info.get("seq_len", 128)
+    corpus_path = _tinystories_path() if name == "tinystories" else \
+        os.path.join(ROOT, "data", f"{name}.txt")
+    if not (os.path.exists(corpus_path) and os.path.getsize(corpus_path) > 0):
+        raise FileNotFoundError(
+            f"no corpus found at {corpus_path}; run download_datasets.py to fetch it")
+
+    text = _load_corpus_text(corpus_path)
+    vocab = _build_vocab(text)
+    pairs = _tokenize(text, vocab, seq_len)
+    if not pairs:
+        raise ValueError(f"corpus too small to form seq_len={seq_len} windows")
+
+    n_val = max(1, int(0.1 * len(pairs)))
+    train_pairs, val_pairs = pairs[:-n_val], pairs[-n_val:]
+    return (DataLoader(_TextDataset(train_pairs), batch_size=batch_size, shuffle=True),
+            DataLoader(_TextDataset(val_pairs), batch_size=batch_size, shuffle=False))

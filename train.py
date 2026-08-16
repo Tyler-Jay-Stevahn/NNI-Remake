@@ -64,6 +64,12 @@ def train(pid, epochs=3, batch_size=32):
     if dataset is None:
         raise ValueError(f"proposal {pid!r} has no spec.dataset")
 
+    # Strict gate: only train proposals that compiled. Preserves "fails".
+    if rec.get("status") != "compiles":
+        raise SystemExit(
+            f"proposal {pid!r} status is {rec.get('status')!r}, not 'compiles'. "
+            f"Run compile_test.py first.")
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     model = build_model.build_model(spec).to(device)
@@ -107,7 +113,24 @@ def train(pid, epochs=3, batch_size=32):
     with open(RESULTS, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(result) + "\n")
 
+    # Advance the proposal's lifecycle status to "trained" in proposals.jsonl.
+    _set_status(pid, "trained")
+
     return result
+
+
+def _set_status(pid, status):
+    """Rewrite proposals.jsonl setting `status` for one proposal id."""
+    path = os.path.join(ROOT, "proposals.jsonl")
+    with open(path, encoding="utf-8") as fh:
+        records = [json.loads(line) for line in fh if line.strip()]
+    for rec in records:
+        if rec.get("id") == pid:
+            rec["status"] = status
+            break
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec) + "\n")
 
 
 def main():

@@ -1,43 +1,125 @@
-import tensorflow as tf
-from models import create_image_model
-from datasets import recycling_data
-from models import resize_image
+#!/usr/bin/env python3
+"""train.py — train one proposal from proposals.jsonl and record results.
 
-model = create_image_model()
+PyTorch training path. Reads a proposal by id, builds its model from the
+spec via build_model.build_model, loads its dataset via datasets.get_dataloader,
+trains for a few epochs, and appends one line to tests/results.jsonl in the
+schema the dashboard already consumes (id, declared_dataset, status, val_acc,
+train_loss, val_loss, inference_ms, param_count, above_chance, test).
 
-data_folder = recycling_data
+Usage:
+    python3 train.py [proposal_id] [--epochs N] [--batch N]
 
-train_ds = tf.keras.utils.image_dataset_from_directory(
-    data_folder,
-    labels='inferred',
-    image_size=(128, 128),
-    batch_size=32
-)
+If no proposal_id is given, trains Thpo-mnist-M01.
+"""
+import argparse
+import json
+import os
+import time
 
-resized_train_ds = train_ds.map(resize_image)
+import torch
+import torch.nn.functional as F
 
-dataset = train_ds.shuffle(buffer_size=1000) # Shuffle the dataset
+import build_model
+import datasets
 
-dataset_size = tf.data.experimental.cardinality(dataset).numpy() # Get the dataset size
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = HERE if os.path.exists(os.path.join(HERE, "proposals.jsonl")) else os.path.dirname(HERE)
+RESULTS = os.path.join(ROOT, "tests", "results.jsonl")
 
-train_size = int(0.8 * dataset_size)
-val_size = int(0.1 * dataset_size)
-test_size = dataset_size - train_size - val_size
 
-train_ds = dataset.take(train_size)
-test_ds = dataset.skip(train_size)
-val_ds = test_ds.skip(test_size)
-test_ds = test_ds.take(test_size)
+def load_proposal(pid):
+    with open(os.path.join(ROOT, "proposals.jsonl"), encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            rec = json.loads(line)
+            if rec.get("id") == pid:
+                return rec
+    raise KeyError(f"proposal {pid!r} not found in proposals.jsonl")
 
-model.compile(
-    optimizer='adam', # or tf.keras.optimizers.Adam()
-    loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False), # use from_logits=True if your last layer doesn't have softmax
-    metrics=['accuracy']
-)
 
-history = model.fit(
-    train_ds,
-    validation_data=val_ds,
-    epochs=10, # Number of training epochs
-    verbose=2
-)
+def count_params(model):
+    return sum(p.numel() for p in model.parameters())
+
+
+def evaluate(model, loader, device):
+    model.eval()
+    correct, total, loss_sum = 0, 0, 0.0
+    with torch.no_grad():
+        for x, y in loader:
+            x, y = x.to(device), y.to(device)
+            out = model(x)
+            loss_sum += F.cross_entropy(out, y, reduction="sum").item()
+            correct += (out.argmax(1) == y).sum().item()
+            total += y.size(0)
+    return loss_sum / max(total, 1), correct / max(total, 1)
+
+
+def train(pid, epochs=3, batch_size=32):
+    rec = load_proposal(pid)
+    spec = rec.get("spec", {}) or {}
+    dataset = spec.get("dataset")
+    if dataset is None:
+        raise ValueError(f"proposal {pid!r} has no spec.dataset")
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    model = build_model.build_model(spec).to(device)
+    n_params = count_params(model)
+
+    train_dl, val_dl = datasets.get_dataloader(dataset, batch_size=batch_size)
+    opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+    start = time.time()
+    for ep in range(epochs):
+        model.train()
+        for x, y in train_dl:
+            x, y = x.to(device), y.to(device)
+            opt.zero_grad()
+            loss = F.cross_entropy(model(x), y)
+            loss.backward()
+            opt.step()
+    train_time_s = time.time() - start
+
+    val_loss, val_acc = evaluate(model, val_dl, device)
+    # approximate train loss from the last train step is unreliable; report val.
+    # Re-run a quick train-set eval for a train_loss estimate.
+    train_loss, _ = evaluate(model, train_dl, device)
+    inference_ms = (train_time_s / max(len(train_dl), 1)) * 1000.0
+
+    above_chance = val_acc > (1.0 / max(build_model.num_classes(dataset), 1))
+
+    result = {
+        "id": pid,
+        "declared_dataset": dataset,
+        "status": "ok",
+        "val_acc": round(val_acc, 4),
+        "train_loss": round(train_loss, 4),
+        "val_loss": round(val_loss, 4),
+        "inference_ms": round(inference_ms, 4),
+        "param_count": n_params,
+        "above_chance": bool(above_chance),
+        "test": "real",
+    }
+
+    with open(RESULTS, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(result) + "\n")
+
+    return result
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("proposal_id", nargs="?", default="Thpo-mnist-M01")
+    ap.add_argument("--epochs", type=int, default=3)
+    ap.add_argument("--batch", type=int, default=32)
+    args = ap.parse_args()
+
+    res = train(args.proposal_id, epochs=args.epochs, batch_size=args.batch)
+    print("Trained", res["id"], "->", res)
+
+
+if __name__ == "__main__":
+    main()

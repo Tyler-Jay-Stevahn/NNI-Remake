@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-NNI-Test Dashboard — zero-dependency web UI (Python standard library only).
+NNI-Remake Dashboard — zero-dependency web UI (Python standard library only).
 
-Serves the NNI-Test repo data (proposals, verification, smoke tests, MNIST
+Serves the NNI-Remake repo data (proposals, verification, smoke tests, MNIST
 results) as a read-only dashboard. Binds to 0.0.0.0:6123 so any machine on the
 same LAN can open it at http://<this-host-ip>:6123.
 
 Requires only the Python standard library. Run:
 
-    cd ~/NNI-Test
+    cd ~/NNI-Remake
     python3 webui/app.py
 
 (or use the systemd user unit in this folder for boot auto-start).
@@ -23,7 +23,9 @@ import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-ROOT = "c:/Users/Snick/Documents/To_Laptop/Python/NNI-Remake/"
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = HERE if os.path.exists(os.path.join(HERE, "proposals.jsonl")) else os.path.dirname(HERE)
+print(ROOT)
 HOST = "0.0.0.0"
 PORT = 6123
 
@@ -79,7 +81,7 @@ BASE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{title}} | NNI-Test</title>
+<title>{{title}} | NNI-Remake</title>
 <style>
   :root { --bg:#0f1115; --card:#171b22; --ink:#e6e9ef; --muted:#8b94a7;
           --line:#262c38; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
@@ -165,14 +167,14 @@ BASE = """<!doctype html>
 </head>
 <body>
 <header>
-  <h1><a class="brand" href="/">NNI-Test</a></h1>
+  <h1><a class="brand" href="/">NNI-Remake</a></h1>
   <nav>
 {{nav}}
   </nav>
 </header>
 <main>
 {{body}}
-<div class="foot">NNI-Test Dashboard &middot; data read live from <code>*.jsonl</code></div>
+<div class="foot">NNI-Remake Dashboard &middot; data read live from <code>*.jsonl</code></div>
 </main>
 </body>
 </html>"""
@@ -1080,7 +1082,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     server = ThreadingHTTPServer((HOST, PORT), Handler)
-    print(f"NNI-Test dashboard on http://{HOST}:{PORT}  (Ctrl-C to stop)")
+    print(f"NNI-Remake dashboard on http://{HOST}:{PORT}  (Ctrl-C to stop)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

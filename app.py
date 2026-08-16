@@ -23,7 +23,7 @@ import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = "c:/Users/Snick/Documents/To_Laptop/Python/NNI-Remake/"
 HOST = "0.0.0.0"
 PORT = 6123
 
@@ -32,6 +32,7 @@ PORT = 6123
 # ---------------------------------------------------------------------------
 def load_jsonl(name):
     path = os.path.join(ROOT, name)
+    print(path)
     if not os.path.exists(path):
         return []
     out = []

@@ -9,7 +9,7 @@ same LAN can open it at http://<this-host-ip>:6123.
 Requires only the Python standard library. Run:
 
     cd ~/NNI-Remake
-    python3 webui/app.py
+    python3 app.py
 
 (or use the systemd user unit in this folder for boot auto-start).
 
@@ -25,7 +25,6 @@ from urllib.parse import urlparse, parse_qs
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = HERE if os.path.exists(os.path.join(HERE, "proposals.jsonl")) else os.path.dirname(HERE)
-print(ROOT)
 HOST = "0.0.0.0"
 PORT = 6123
 

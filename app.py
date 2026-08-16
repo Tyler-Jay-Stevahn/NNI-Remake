@@ -33,7 +33,6 @@ PORT = 6123
 # ---------------------------------------------------------------------------
 def load_jsonl(name):
     path = os.path.join(ROOT, name)
-    print(path)
     if not os.path.exists(path):
         return []
     out = []
@@ -235,12 +234,11 @@ def proposals_table(records, real=None):
             f"<td>{esc(p.get('task_family'))}</td>"
             f"<td>{esc(model)}</td>"
             f"<td>{esc(dataset)}</td>"
-            f"<td>{badge(_test_status(p, real))}</td>"
             f"</tr>"
         )
     return (
         "<table><thead><tr><th>ID</th><th>Family</th><th>Model</th>"
-        "<th>Dataset</th><th>Status</th></tr></thead><tbody>"
+        "<th>Dataset</th></tr></thead><tbody>"
         + "".join(rows) + "</tbody></table>"
     )
 
@@ -666,7 +664,6 @@ def page_mnist():
             f"<tr><td><a href='/proposal/{pid}'>{pid}</a></td>"
             f"<td>{fam}</td>"
             f"<td>{esc(m.get('declared_dataset'))}</td>"
-            f"<td>{badge(m.get('status'))}</td>"
             f"<td>{esc(m.get('val_acc'))}</td>"
             f"<td>{esc(m.get('param_count'))}</td>"
             f"<td>{esc(m.get('train_loss'))}</td>"
@@ -675,7 +672,7 @@ def page_mnist():
             f"<td>{badge(m.get('above_chance'))}</td></tr>"
         )
     table = ("<table><thead><tr><th>ID</th>"
-             "<th>Family</th><th>Dataset</th><th>Status</th><th>Val acc</th><th>Params</th>"
+             "<th>Family</th><th>Dataset</th><th>Val acc</th><th>Params</th>"
              "<th>Train loss</th><th>Val loss</th><th>Infer ms</th>"
              "<th>Above chance</th>"
              "</tr></thead><tbody>" + "".join(rows) + "</tbody></table>")
@@ -891,7 +888,6 @@ def family_table(fps, real):
             f"<tr><td><a href='/proposal/{pid}'>{pid}</a></td>"
             f"<td>{esc(p.get('task_family'))}</td>"
             f"<td>{esc(ds)}</td>"
-            f"<td>{badge(_test_status(p, real))}</td>"
             f"<td>{esc(val_acc)}</td>"
             f"<td>{esc(params)}</td>"
             f"<td>{esc(train_loss)}</td>"
@@ -900,7 +896,7 @@ def family_table(fps, real):
             f"<td>{badge(above) if above is not None else ''}</td></tr>"
         )
     return ("<table><thead><tr><th>ID</th><th>Family</th><th>Dataset</th>"
-            "<th>Status</th><th>Val acc</th><th>Params</th>"
+            "<th>Val acc</th><th>Params</th>"
             "<th>Train loss</th><th>Val loss</th><th>Infer ms</th>"
             "<th>Above chance</th>"
             "</tr></thead><tbody>" + "".join(rows) + "</tbody></table>")

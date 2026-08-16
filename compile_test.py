@@ -83,16 +83,18 @@ def process(rec):
 
 
 def main():
-    records = load_all()
+    all_records = load_all()
 
     pid = input("Proposal id (blank = all 'proposed'): ").strip()
     if pid:
-        records = [r for r in records if r.get("id") == pid]
-        if not records:
+        target = [r for r in all_records if r.get("id") == pid]
+        if not target:
             raise SystemExit(f"proposal {pid!r} not found")
+    else:
+        target = all_records
 
     changed = []
-    for rec in records:
+    for rec in target:
         if rec.get("status") != "proposed":
             continue
         result = process(rec)
@@ -100,7 +102,10 @@ def main():
         print(f"{rec['id']}: {result}")
 
     if changed:
-        save_all(records)
+        # Save the FULL list (target is a filtered view into the same
+        # objects, so process() mutations are reflected). Saving only
+        # `target` would erase every other proposal from the file.
+        save_all(all_records)
         print(f"\nUpdated {len(changed)} proposal(s) in proposals.jsonl")
     else:
         print("No 'proposed' proposals to process.")

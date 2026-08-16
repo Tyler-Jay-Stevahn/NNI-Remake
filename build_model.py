@@ -87,7 +87,7 @@ def sample_batch(spec, batch=2):
     info = dataset_info(spec.get("dataset", ""))
     shape = info["shape"]
     if info["modality"] == "text":
-        x = torch.randint(0, info.get("vocab", 20000), (batch, *shape))
+        x = torch.randint(0, spec.get("vocab", info.get("vocab", 20000)), (batch, *shape))
     else:
         x = torch.randn(batch, *shape)
     if spec.get("task_type") == "text-gen":
@@ -552,7 +552,7 @@ def build_model(spec: dict) -> nn.Module:
         if b0.get("type") != "embedding":
             raise ValueError("a text model must start with an `embedding` block")
         emb_dim = b0.get("dim", 64)
-        blocks += [nn.Embedding(info.get("vocab", 20000), emb_dim), SwapTimeChannel()]
+        blocks += [nn.Embedding(spec.get("vocab", info.get("vocab", 20000)), emb_dim), SwapTimeChannel()]
         cur = emb_dim
         rest = spec["blocks"][1:]
         for b in rest:

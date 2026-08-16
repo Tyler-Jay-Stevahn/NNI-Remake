@@ -27,7 +27,7 @@ DATASETS = {
     "cifar10":          {"modality": "image",      "shape": (3, 32, 32),   "classes": 10,  "loader": "torchvision", "name": "CIFAR-10"},
     "cifar100":         {"modality": "image",      "shape": (3, 32, 32),   "classes": 100, "loader": "torchvision", "name": "CIFAR-100"},
     "Recycling-Data":   {"modality": "image",      "shape": (3, 128, 128), "classes": 11,  "loader": "local",       "name": "Recycling Dataset"},
-    "tinystories":      {"modality": "text",       "shape": (128,),        "classes": 0,   "loader": "text",        "name": "TinyStories", "seq_len": 128, "vocab": 0},
+    "tinystories":      {"modality": "text",       "shape": (128,),        "classes": 0,   "loader": "text",        "name": "TinyStories", "seq_len": 128, "vocab": 256},
 }
 
 

@@ -34,6 +34,7 @@ DATASETS = {
     "cifar10":          {"modality": "image", "shape": (3, 16, 16), "classes": 10},
     "cifar100":         {"modality": "image", "shape": (3, 16, 16), "classes": 100},
     "imagenet-subset":  {"modality": "image", "shape": (3, 16, 16), "classes": 10},
+    "Recycling-Data":  {"modality": "image", "shape": (3, 128, 128), "classes": 11},
     "openml-ctr23":     {"modality": "tabular", "shape": (20,), "classes": 2},
     # --- new: audio ---
     "speech-commands":  {"modality": "audio-mel", "shape": (1, 64, 64), "classes": 12},

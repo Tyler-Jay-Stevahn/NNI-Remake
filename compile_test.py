@@ -77,7 +77,13 @@ def compile_one(rec):
     if out.dim() == 2:
         loss = F.cross_entropy(out, y)
     elif out.dim() == 3:
-        # lm_head: out (B, vocab, T), y (B, T) token ids.
+        # lm_head: out (B, vocab, T), y (B, T) token ids. Some architectures
+        # (e.g. strided pooling) change the sequence length, so align y to the
+        # output's T before the loss. The compile gate only needs matching
+        # shapes to validate forward+backward; real training shifts properly.
+        T = out.shape[-1]
+        if y.shape[-1] != T:
+            y = y[..., :T]
         loss = F.cross_entropy(out, y)
     elif out.dim() == 4:
         target = torch.nn.functional.one_hot(y, num_classes=out.shape[1])

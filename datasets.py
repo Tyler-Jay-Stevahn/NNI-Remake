@@ -45,9 +45,14 @@ def get_dataloader(name, batch_size=32):
 
     torchvision datasets (mnist, cifar10, cifar100) are downloaded into
     ROOT/data on first use. The local image dataset (Recycling-Data) is
-    loaded from class subfolders under ROOT/data.
+    loaded from class subfolders under ROOT/data. Text datasets (tinystories)
+    are tokenised from a corpus via get_text_dataloader.
     """
     info = DATASETS[name]
+
+    if info["loader"] == "text":
+        return get_text_dataloader(name, batch_size=batch_size)
+
     tfm = _image_transforms(info["shape"])
 
     if info["loader"] == "torchvision":

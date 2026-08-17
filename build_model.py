@@ -24,6 +24,7 @@ import types
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 # ---------------------------------------------------------------------------
 # Dataset table: modality, tensor shape, class/cluster count, vocabulary.

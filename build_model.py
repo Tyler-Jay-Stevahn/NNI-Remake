@@ -42,6 +42,7 @@ DATASETS = {
     # --- new: text ---
     "ag-news":          {"modality": "text", "shape": (64,), "classes": 4, "vocab": 20000},
     "imdb":             {"modality": "text", "shape": (128,), "classes": 2, "vocab": 20000},
+    "tinystories":      {"modality": "text", "shape": (128,), "classes": 0, "vocab": 256},
     # --- new: time series ---
     "uci-har":          {"modality": "timeseries", "shape": (9, 128), "classes": 6},
     # --- new: clustering ---

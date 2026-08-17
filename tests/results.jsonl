@@ -85,3 +85,5 @@
 {"id": "Ttext-attention-imdb-M05", "task_family": "text-attention-imdb", "declared_dataset": "imdb", "status": "ok", "val_acc": 1.0, "train_loss": 0.2032, "val_loss": 0.0451, "inference_ms": 2.9739, "param_count": 12867586, "above_chance": true, "test": "real"}
 {"id": "Thpo-mnist-M01", "declared_dataset": "mnist", "status": "ok", "val_acc": 0.9622, "train_loss": 0.0681, "val_loss": 0.1389, "inference_ms": 28.3215, "param_count": 25450, "above_chance": true, "test": "real"}
 {"id": "Thpo-mnist-M01", "declared_dataset": "mnist", "status": "ok", "val_acc": 0.9645, "train_loss": 0.0638, "val_loss": 0.1219, "inference_ms": 26.8179, "param_count": 25450, "above_chance": true, "test": "real"}
+{"id": "Thpo-mnist-M01", "declared_dataset": "mnist", "status": "ok", "val_acc": 0.959, "train_loss": 0.0713, "val_loss": 0.1453, "inference_ms": 19.7332, "param_count": 25450, "above_chance": true, "test": "real"}
+{"id": "Thpo-mnist-M02", "declared_dataset": "mnist", "status": "ok", "val_acc": 0.9748, "train_loss": 0.0278, "val_loss": 0.0857, "inference_ms": 21.9095, "param_count": 50890, "above_chance": true, "test": "real"}

@@ -7,7 +7,8 @@ For every proposal whose status is "proposed", verify it can:
   3. train on 2 real samples from its own dataset (datasets.get_dataloader).
 On success the proposal's status becomes "compiles"; on any failure it
 becomes "fails". The status is written back into proposals.jsonl (no
-separate results file). This replaces the old TF smoke-test stage.
+place AND appends a structured record (id, error, full traceback, timestamp)
+to fails.jsonl. This replaces the old TF smoke-test stage.
 
 Usage:
     python3 compile_test.py
@@ -15,8 +16,10 @@ Usage:
 The script prompts interactively. Leave the proposal id blank to process all
 "proposed" proposals, or type a specific id to process only that one.
 """
+import datetime
 import json
 import os
+import traceback
 
 import torch
 import torch.nn.functional as F
@@ -27,6 +30,7 @@ import datasets
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = HERE if os.path.exists(os.path.join(HERE, "proposals.jsonl")) else os.path.dirname(HERE)
 SRC = os.path.join(ROOT, "proposals.jsonl")
+FAILS = os.path.join(ROOT, "fails.jsonl")
 
 N_SAMPLES = 2
 
@@ -103,6 +107,42 @@ def compile_one(rec):
     return True
 
 
+def record_fail(rec, exc):
+    """Merge this failure into fails.jsonl, keyed by proposal id (idempotent).
+
+    Each run appends/updates one JSON line per failing proposal so the file
+    accumulates every compile failure with its full traceback, without
+    duplicating entries across re-runs.
+    """
+    entry = {
+        "id": rec.get("id"),
+        "dataset": (rec.get("spec") or {}).get("dataset"),
+        "model": (rec.get("spec") or {}).get("model"),
+        "task": rec.get("task"),
+        "status": "fails",
+        "error_type": type(exc).__name__,
+        "error": str(exc),
+        "traceback": traceback.format_exc().strip(),
+        "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+    }
+    existing = {}
+    if os.path.exists(FAILS):
+        with open(FAILS, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                    existing[obj.get("id")] = obj
+                except json.JSONDecodeError:
+                    continue
+    existing[entry["id"]] = entry
+    with open(FAILS, "w", encoding="utf-8") as fh:
+        for obj in existing.values():
+            fh.write(json.dumps(obj) + "\n")
+
+
 def process(rec):
     try:
         compile_one(rec)
@@ -111,6 +151,7 @@ def process(rec):
     except Exception as e:  # noqa: BLE001
         rec["status"] = "fails"
         rec["compile_error"] = f"{type(e).__name__}: {e}"
+        record_fail(rec, e)
         return f"fails ({rec['compile_error']})"
 
 

@@ -85,27 +85,20 @@ def get_dataloader(name, batch_size=32):
 
 # ---------------------------------------------------------------------------
 # Text dataset: TinyStories (char-level, next-token targets)
+#
+# Expected on-disk layout (already downloaded by the user):
+#   data/TinyStories/TinyStories-train.txt
+#   data/TinyStories/TinyStories-valid.txt
 # ---------------------------------------------------------------------------
-def _tinystories_path():
-    # Accept either a single file or a directory of .txt files.
-    p = os.path.join(ROOT, "data", "tinystories.txt")
-    if os.path.exists(p):
-        return p
-    d = os.path.join(ROOT, "data", "tinystories")
-    if os.path.isdir(d):
-        return d
-    return p  # caller will report the missing file
+def _tinystories_paths():
+    """Return (train_path, val_path) for the TinyStories corpus."""
+    base = os.path.join(ROOT, "data", "TinyStories")
+    train = os.path.join(base, "TinyStories-train.txt")
+    val = os.path.join(base, "TinyStories-valid.txt")
+    return train, val
 
 
-def _load_corpus_text(path):
-    if os.path.isdir(path):
-        chunks = []
-        for fn in sorted(os.listdir(path)):
-            if fn.lower().endswith(".txt"):
-                with open(os.path.join(path, fn), encoding="utf-8",
-                          errors="ignore") as fh:
-                    chunks.append(fh.read())
-        return "\n".join(chunks)
+def _load_text_file(path):
     with open(path, encoding="utf-8", errors="ignore") as fh:
         return fh.read()
 
@@ -154,26 +147,39 @@ class _TextDataset(torch.utils.data.Dataset):
 def get_text_dataloader(name, batch_size=32):
     """Return (train_loader, val_loader) for a text dataset (next-token LM).
 
-    Loads the corpus from data/<name>.txt (or data/<name>/), builds a
-    char-level vocab, and yields (input_ids, target_ids) where target is the
-    input shifted by one. Intended for a `text-gen` task; the builder's LM
-    head consumes (x, y) directly.
+    For tinystories, reads data/TinyStories/TinyStories-train.txt (train) and
+    TinyStories-valid.txt (val), builds a char-level vocab over the combined
+    corpus, and yields (input_ids, target_ids) where target is the input
+    shifted by one. The builder's LM head consumes (x, y) directly.
     """
     info = DATASETS[name]
     seq_len = info.get("seq_len", 128)
-    corpus_path = _tinystories_path() if name == "tinystories" else \
-        os.path.join(ROOT, "data", f"{name}.txt")
-    if not (os.path.exists(corpus_path) and os.path.getsize(corpus_path) > 0):
-        raise FileNotFoundError(
-            f"no corpus found at {corpus_path}; run download_datasets.py to fetch it")
 
-    text = _load_corpus_text(corpus_path)
-    vocab = _build_vocab(text)
-    pairs = _tokenize(text, vocab, seq_len)
-    if not pairs:
+    if name == "tinystories":
+        train_path, val_path = _tinystories_paths()
+        if not (os.path.exists(train_path) and os.path.getsize(train_path) > 0):
+            raise FileNotFoundError(
+                f"no TinyStories corpus at {train_path}; expected the dataset "
+                f"under data/TinyStories/ (TinyStories-train.txt / -valid.txt)")
+        train_text = _load_text_file(train_path)
+        val_text = _load_text_file(val_path) if os.path.exists(val_path) else ""
+        vocab = _build_vocab(train_text + "\n" + val_text)
+        train_pairs = _tokenize(train_text, vocab, seq_len)
+        val_pairs = _tokenize(val_text, vocab, seq_len) if val_text else train_pairs[-max(1, int(0.1 * len(train_pairs))):]
+    else:
+        corpus_path = os.path.join(ROOT, "data", f"{name}.txt")
+        if not (os.path.exists(corpus_path) and os.path.getsize(corpus_path) > 0):
+            raise FileNotFoundError(f"no corpus found at {corpus_path}")
+        text = _load_text_file(corpus_path)
+        vocab = _build_vocab(text)
+        pairs = _tokenize(text, vocab, seq_len)
+        if not pairs:
+            raise ValueError(f"corpus too small to form seq_len={seq_len} windows")
+        n_val = max(1, int(0.1 * len(pairs)))
+        train_pairs, val_pairs = pairs[:-n_val], pairs[-n_val:]
+
+    if not train_pairs:
         raise ValueError(f"corpus too small to form seq_len={seq_len} windows")
 
-    n_val = max(1, int(0.1 * len(pairs)))
-    train_pairs, val_pairs = pairs[:-n_val], pairs[-n_val:]
     return (DataLoader(_TextDataset(train_pairs), batch_size=batch_size, shuffle=True),
             DataLoader(_TextDataset(val_pairs), batch_size=batch_size, shuffle=False))

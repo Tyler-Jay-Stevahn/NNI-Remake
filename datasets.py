@@ -40,18 +40,19 @@ def _image_transforms(shape):
     ])
 
 
-def get_dataloader(name, batch_size=32):
+def get_dataloader(name, batch_size=32, max_chars=None):
     """Return (train_loader, val_loader) for the named dataset.
 
     torchvision datasets (mnist, cifar10, cifar100) are downloaded into
     ROOT/data on first use. The local image dataset (Recycling-Data) is
     loaded from class subfolders under ROOT/data. Text datasets (tinystories)
-    are tokenised from a corpus via get_text_dataloader.
+    are tokenised from a corpus via get_text_dataloader (max_chars caps how
+    much of the corpus is tokenised — used by the compile smoke-test).
     """
     info = DATASETS[name]
 
     if info["loader"] == "text":
-        return get_text_dataloader(name, batch_size=batch_size)
+        return get_text_dataloader(name, batch_size=batch_size, max_chars=max_chars)
 
     tfm = _image_transforms(info["shape"])
 
@@ -144,13 +145,19 @@ class _TextDataset(torch.utils.data.Dataset):
         return torch.tensor(x, dtype=torch.long), torch.tensor(y, dtype=torch.long)
 
 
-def get_text_dataloader(name, batch_size=32):
+def get_text_dataloader(name, batch_size=32, max_chars=None):
     """Return (train_loader, val_loader) for a text dataset (next-token LM).
 
     For tinystories, reads data/TinyStories/TinyStories-train.txt (train) and
     TinyStories-valid.txt (val), builds a char-level vocab over the combined
     corpus, and yields (input_ids, target_ids) where target is the input
     shifted by one. The builder's LM head consumes (x, y) directly.
+
+    `max_chars` (optional) caps how much of the corpus is tokenised. This is
+    used by the compile smoke-test (compile_test.two_samples), which only needs
+    a couple of batches; without it the loader materialises the entire corpus
+    into RAM (tens of GB for TinyStories) and takes minutes, for a 2-sample
+    check. Real training passes max_chars=None to use the full corpus.
     """
     info = DATASETS[name]
     seq_len = info.get("seq_len", 128)
@@ -162,7 +169,11 @@ def get_text_dataloader(name, batch_size=32):
                 f"no TinyStories corpus at {train_path}; expected the dataset "
                 f"under data/TinyStories/ (TinyStories-train.txt / -valid.txt)")
         train_text = _load_text_file(train_path)
+        if max_chars is not None:
+            train_text = train_text[:max_chars]
         val_text = _load_text_file(val_path) if os.path.exists(val_path) else ""
+        if max_chars is not None:
+            val_text = val_text[:max_chars]
         vocab = _build_vocab(train_text + "\n" + val_text)
         train_pairs = _tokenize(train_text, vocab, seq_len)
         val_pairs = _tokenize(val_text, vocab, seq_len) if val_text else train_pairs[-max(1, int(0.1 * len(train_pairs))):]

@@ -43,8 +43,15 @@ def save_all(records):
 
 
 def two_samples(dataset):
-    """Return a (x, y) batch of exactly N_SAMPLES from the dataset loader."""
-    train_dl, _ = datasets.get_dataloader(dataset, batch_size=N_SAMPLES)
+    """Return a (x, y) batch of exactly N_SAMPLES from the dataset loader.
+
+    For text datasets this caps the tokenised corpus (max_chars) to a few
+    windows so the compile smoke-test does not load the entire corpus into RAM.
+    """
+    info = datasets.DATASETS.get(dataset, {})
+    seq_len = info.get("seq_len", 128)
+    max_chars = seq_len * (N_SAMPLES + 4)  # a handful of windows, a few MB
+    train_dl, _ = datasets.get_dataloader(dataset, batch_size=N_SAMPLES, max_chars=max_chars)
     for x, y in train_dl:
         if x.size(0) >= N_SAMPLES:
             return x[:N_SAMPLES], y[:N_SAMPLES]

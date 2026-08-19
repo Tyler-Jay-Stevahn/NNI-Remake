@@ -184,3 +184,4 @@
 {"id": "Tgn-cifar-M01", "declared_dataset": "cifar10", "status": "ok", "val_acc": 0.557, "train_loss": 1.2293, "val_loss": 1.2394, "inference_ms": 27.9616, "param_count": 19786, "above_chance": true, "test": "real", "text_gen": false}
 {"id": "Tgn-cifar-M02", "declared_dataset": "cifar10", "status": "ok", "val_acc": 0.5758, "train_loss": 1.1773, "val_loss": 1.1834, "inference_ms": 28.0782, "param_count": 19850, "above_chance": true, "test": "real", "text_gen": false}
 {"id": "Tgn-cifar-M03", "declared_dataset": "cifar10", "status": "ok", "val_acc": 0.5626, "train_loss": 1.1736, "val_loss": 1.2338, "inference_ms": 28.6415, "param_count": 19914, "above_chance": true, "test": "real", "text_gen": false}
+{"id": "Tattn-recycle-M01", "declared_dataset": "Recycling-Data", "status": "ok", "val_acc": 0.3323, "train_loss": 1.9966, "val_loss": 1.9585, "inference_ms": 931.0105, "param_count": 4107, "above_chance": true, "test": "real", "text_gen": false}

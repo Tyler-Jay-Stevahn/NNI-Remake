@@ -200,9 +200,9 @@ def main():
         return
 
     epochs_s = input("Epochs [default: 10]: ").strip()
-    batch_s = input("Batch size [default: 32]: ").strip()
+    batch_s = input("Batch size [default: 4]: ").strip()
     epochs = int(epochs_s) if epochs_s else 10
-    batch_size = int(batch_s) if batch_s else 32
+    batch_size = int(batch_s) if batch_s else 4
 
     done, skipped = 0, 0
     for r in target:

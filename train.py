@@ -88,15 +88,30 @@ def train(pid, epochs=3, batch_size=32):
     train_dl, val_dl = datasets.get_dataloader(dataset, batch_size=batch_size)
     opt = torch.optim.Adam(model.parameters(), lr=1e-3)
 
+    print(f"Training {pid} on {dataset}  params={n_params}  "
+          f"epochs={epochs}  batch={batch_size}", flush=True)
     start = time.time()
+    n_batches = len(train_dl)
     for ep in range(epochs):
         model.train()
-        for x, y in train_dl:
+        running_loss = 0.0
+        for bi, (x, y) in enumerate(train_dl, 1):
             x, y = x.to(device), y.to(device)
             opt.zero_grad()
             loss = F.cross_entropy(model(x), y)
             loss.backward()
             opt.step()
+            running_loss += loss.item()
+            # Live batch progress (carriage-return overwrite, no external deps).
+            print(f"\r[{pid}] epoch {ep + 1}/{epochs}  "
+                  f"batch {bi}/{n_batches}  loss={loss.item():.4f}",
+                  end="", flush=True)
+        avg_loss = running_loss / max(n_batches, 1)
+        elapsed = time.time() - start
+        # Epoch summary line (newline so the next epoch starts clean).
+        print(f"\r[{pid}] epoch {ep + 1}/{epochs}  done  "
+              f"avg_train_loss={avg_loss:.4f}  elapsed={elapsed:.1f}s",
+              flush=True)
     train_time_s = time.time() - start
 
     val_loss, val_acc = evaluate(model, val_dl, device)

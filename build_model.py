@@ -32,9 +32,9 @@ import torch.nn.functional as F
 DATASETS = {
     # --- existing (unchanged behaviour) ---
     "mnist":            {"modality": "image", "shape": (1, 28, 28), "classes": 10},
-    "cifar10":          {"modality": "image", "shape": (3, 16, 16), "classes": 10},
-    "cifar100":         {"modality": "image", "shape": (3, 16, 16), "classes": 100},
-    "imagenet-subset":  {"modality": "image", "shape": (3, 16, 16), "classes": 10},
+    "cifar10":          {"modality": "image", "shape": (3, 32, 32), "classes": 10},
+    "cifar100":         {"modality": "image", "shape": (3, 32, 32), "classes": 100},
+    "imagenet-subset":  {"modality": "image", "shape": (3, 32, 32), "classes": 10},
     "Recycling-Data":  {"modality": "image", "shape": (3, 128, 128), "classes": 11},
     "openml-ctr23":     {"modality": "tabular", "shape": (20,), "classes": 2},
     # --- new: audio ---

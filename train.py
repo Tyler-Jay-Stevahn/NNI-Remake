@@ -87,6 +87,8 @@ def train(pid, epochs=3, batch_size=32):
 
     train_dl, val_dl = datasets.get_dataloader(dataset, batch_size=batch_size)
     opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+    opt_name = "adam"
+    opt_lr = opt.defaults["lr"]
 
     print(f"Training {pid} on {dataset}  params={n_params}  "
           f"epochs={epochs}  batch={batch_size}", flush=True)
@@ -139,6 +141,10 @@ def train(pid, epochs=3, batch_size=32):
         "above_chance": bool(above_chance),
         "test": "real",
         "text_gen": bool(spec.get("task_type") == "text-gen"),
+        "optimizer": opt_name,
+        "lr": round(opt_lr, 6),
+        "epochs": epochs,
+        "batch": batch_size,
     }
 
     with open(RESULTS, "a", encoding="utf-8") as fh:

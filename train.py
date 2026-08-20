@@ -10,8 +10,10 @@ train_loss, val_loss, inference_ms, param_count, above_chance, test).
 Usage:
     python3 train.py
 
-The script prompts interactively for the proposal id, number of epochs, and
-batch size. Press ENTER to accept the shown default.
+The script prompts interactively for the proposal id, then asks four separate
+questions (epochs, batch size, learning rate, optimizer) — one prompt per item.
+Leave any prompt blank to use that proposal's own config (read from
+proposals.jsonl).
 """
 import json
 import os
@@ -26,6 +28,14 @@ import datasets
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = HERE if os.path.exists(os.path.join(HERE, "proposals.jsonl")) else os.path.dirname(HERE)
 RESULTS = os.path.join(ROOT, "tests", "results.jsonl")
+
+# Optimizer-name -> torch optimizer class. Unknown names fall back to Adam.
+OPT_MAP = {
+    "adam": torch.optim.Adam,
+    "adamw": torch.optim.AdamW,
+    "sgd": torch.optim.SGD,
+    "rmsprop": torch.optim.RMSprop,
+}
 
 
 def load_proposal(pid):
@@ -67,7 +77,7 @@ def evaluate(model, loader, device):
     return loss_sum / max(total, 1), correct / max(total, 1)
 
 
-def train(pid, epochs=3, batch_size=32):
+def train(pid, epochs=None, batch_size=None, lr=None, optimizer=None):
     rec = load_proposal(pid)
     spec = rec.get("spec", {}) or {}
     dataset = spec.get("dataset")
@@ -80,18 +90,39 @@ def train(pid, epochs=3, batch_size=32):
             f"proposal {pid!r} status is {rec.get('status')!r}, not 'compiles'. "
             f"Run compile_test.py first.")
 
+    # Pull training config from the proposal (single source of truth).
+    # CLI args (below) override only when explicitly provided.
+    cfg_epochs = rec.get("epochs")
+    cfg_batch = rec.get("batch")
+    cfg_lr = rec.get("lr")
+    cfg_opt = rec.get("optimizer")
+
+    if epochs is None:
+        epochs = int(cfg_epochs) if cfg_epochs is not None else 10
+    if batch_size is None:
+        batch_size = int(cfg_batch) if cfg_batch is not None else 4
+    if lr is None:
+        lr = float(cfg_lr) if cfg_lr is not None else 1e-3
+    if optimizer is None:
+        optimizer = str(cfg_opt) if cfg_opt else "adam"
+
+    opt_name = optimizer.lower()
+    opt_cls = OPT_MAP.get(opt_name, torch.optim.Adam)
+    if opt_name not in OPT_MAP:
+        print(f"  [warn] unknown optimizer {opt_name!r}; falling back to adam",
+              flush=True)
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     model = build_model.build_model(spec).to(device)
     n_params = count_params(model)
 
     train_dl, val_dl = datasets.get_dataloader(dataset, batch_size=batch_size)
-    opt = torch.optim.Adam(model.parameters(), lr=1e-3)
-    opt_name = "adam"
+    opt = opt_cls(model.parameters(), lr=lr)
     opt_lr = opt.defaults["lr"]
 
     print(f"Training {pid} on {dataset}  params={n_params}  "
-          f"epochs={epochs}  batch={batch_size}", flush=True)
+          f"opt={opt_name}  lr={lr}  epochs={epochs}  batch={batch_size}", flush=True)
     start = time.time()
     n_batches = len(train_dl)
     for ep in range(epochs):
@@ -205,10 +236,17 @@ def main():
         print("No 'compiles' proposals match the filter.")
         return
 
-    epochs_s = input("Epochs [default: 10]: ").strip()
-    batch_s = input("Batch size [default: 4]: ").strip()
-    epochs = int(epochs_s) if epochs_s else 10
-    batch_size = int(batch_s) if batch_s else 4
+    epochs_s = input("Epochs [blank = use this proposal's config]: ").strip()
+    epochs = int(epochs_s) if epochs_s else None
+
+    batch_s = input("Batch size [blank = use this proposal's config]: ").strip()
+    batch_size = int(batch_s) if batch_s else None
+
+    lr_s = input("Learning rate [blank = use this proposal's config]: ").strip()
+    lr = float(lr_s) if lr_s else None
+
+    opt_s = input("Optimizer (adam/adamw/sgd/rmsprop) [blank = use this proposal's config]: ").strip()
+    optimizer = opt_s if opt_s else None
 
     done, skipped = 0, 0
     for r in target:
@@ -228,7 +266,8 @@ def main():
             skipped += 1
             continue
         try:
-            res = train(r["id"], epochs=epochs, batch_size=batch_size)
+            res = train(r["id"], epochs=epochs, batch_size=batch_size,
+                        lr=lr, optimizer=optimizer)
             print(f"  {r['id']}: ok  val_acc={res['val_acc']}  above_chance={res['above_chance']}")
             done += 1
         except Exception as e:  # noqa: BLE001

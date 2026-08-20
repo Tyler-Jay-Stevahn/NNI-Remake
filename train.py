@@ -24,6 +24,7 @@ import torch.nn.functional as F
 
 import build_model
 import datasets
+import optimizers
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = HERE if os.path.exists(os.path.join(HERE, "proposals.jsonl")) else os.path.dirname(HERE)
@@ -107,10 +108,25 @@ def train(pid, epochs=None, batch_size=None, lr=None, optimizer=None):
         optimizer = str(cfg_opt) if cfg_opt else "adam"
 
     opt_name = optimizer.lower()
-    opt_cls = OPT_MAP.get(opt_name, torch.optim.Adam)
-    if opt_name not in OPT_MAP:
-        print(f"  [warn] unknown optimizer {opt_name!r}; falling back to adam",
-              flush=True)
+
+    # Custom optimizer strategy: "custom:<name>" -> look up in optimizers.REGISTRY.
+    # Unknown custom name is a hard error (no silent fallback). Stock optimizers
+    # ignore optimizer_kwargs (only forwarded to custom classes).
+    if opt_name.startswith("custom:"):
+        cname = opt_name[len("custom:"):]
+        if cname not in optimizers.REGISTRY:
+            raise SystemExit(
+                f"custom optimizer {cname!r} not found in optimizers.REGISTRY. "
+                f"Add it to optimizers.py with @register({cname!r}).")
+        opt_cls = optimizers.REGISTRY[cname]
+        opt_kwargs = rec.get("optimizer_kwargs") or {}
+        print(f"  [custom optimizer] {cname} kwargs={opt_kwargs}", flush=True)
+    else:
+        opt_cls = OPT_MAP.get(opt_name, torch.optim.Adam)
+        if opt_name not in OPT_MAP:
+            print(f"  [warn] unknown optimizer {opt_name!r}; falling back to adam",
+                  flush=True)
+        opt_kwargs = {}
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -118,7 +134,7 @@ def train(pid, epochs=None, batch_size=None, lr=None, optimizer=None):
     n_params = count_params(model)
 
     train_dl, val_dl = datasets.get_dataloader(dataset, batch_size=batch_size)
-    opt = opt_cls(model.parameters(), lr=lr)
+    opt = opt_cls(model.parameters(), lr=lr, **opt_kwargs)
     opt_lr = opt.defaults["lr"]
 
     print(f"Training {pid} on {dataset}  params={n_params}  "

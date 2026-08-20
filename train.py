@@ -156,7 +156,7 @@ def train(pid, epochs=None, batch_size=None, lr=None, optimizer=None):
     cfg_sched = rec.get("scheduler")
     sched_fn = None
     sched_kwargs = {}
-    total_steps = epochs * len(train_dl) if (epochs and train_dl) else 1
+    # total_steps is computed after train_dl is built (see below).
     if cfg_sched:
         sname = str(cfg_sched).lower()
         if sname.startswith("custom:"):
@@ -212,6 +212,9 @@ def train(pid, epochs=None, batch_size=None, lr=None, optimizer=None):
     train_dl, val_dl = datasets.get_dataloader(dataset, batch_size=batch_size)
     opt = opt_cls(model.parameters(), lr=lr, **opt_kwargs)
     opt_lr = opt.defaults["lr"]
+
+    # Total training steps for scheduler scaling (needs train_dl, defined above).
+    total_steps = epochs * max(1, len(train_dl)) if epochs else 1
 
     # LBFGS and Sophia need a closure that re-runs forward/backward (LBFGS
     # re-evaluates the loss; Sophia estimates the diagonal Hessian). All other

@@ -114,6 +114,11 @@ class Diff8BitAdam(torch.optim.Optimizer):
             raise SystemExit(
                 "custom optimizer 'diff8bit' needs the 'bitsandbytes' package "
                 "(pip install bitsandbytes) and a CUDA GPU; it is not available here.")
+        # Materialize params ONCE. model.parameters() is a generator; the
+        # parent __init__ does list(params) internally and exhausts it, so
+        # handing the same iterator to bnb.optim.Adam8bit yields "empty
+        # parameter list". Share one concrete list with both consumers.
+        params = list(params)
         super().__init__(params, dict(lr=lr, betas=betas, eps=eps,
                                       weight_decay=weight_decay))
         self._inner = bnb.optim.Adam8bit(params, lr=lr, betas=betas,

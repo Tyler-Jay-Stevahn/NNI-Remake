@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
 """train.py — train one proposal from proposals.jsonl and record results.
 
-PyTorch training path. Reads a proposal by id, builds its model from the
-spec via build_model.build_model, loads its dataset via datasets.get_dataloader,
-trains for a few epochs, and appends one line to tests/results.jsonl in the
-schema the dashboard already consumes (id, declared_dataset, status, val_acc,
-train_loss, val_loss, inference_ms, param_count, above_chance, test).
-
 Usage:
-    python3 train.py
-
-The script prompts interactively for the proposal id, then asks four separate
-questions (epochs, batch size, learning rate, optimizer) — one prompt per item.
-Leave any prompt blank to use that proposal's own config (read from
-proposals.jsonl).
+    python train.py                    # interactive
+    python train.py PID                # train specific proposal with defaults
+    python train.py PID --auto         # non-interactive, use proposal config
+    python train.py --auto             # sweep all 'compiles' with defaults
 """
+import argparse
+import json
+import os
+import sys
+
+import torch
+import torch.nn.functional as F
+
+import build_model
+import datasets
+import initializers
+import losses
+import optimizers
+import schedulers
+
+import regularizations
 import json
 import os
 import time
@@ -209,7 +217,8 @@ def train(pid, epochs=None, batch_size=None, lr=None, optimizer=None):
 
     n_params = count_params(model)
 
-    train_dl, val_dl = datasets.get_dataloader(dataset, batch_size=batch_size)
+    augment = spec.get("augment", False)
+    train_dl, val_dl = datasets.get_dataloader(dataset, batch_size=batch_size, augment=augment)
     opt = opt_cls(model.parameters(), lr=lr, **opt_kwargs)
     opt_lr = opt.defaults["lr"]
 
@@ -335,10 +344,19 @@ def _set_status(pid, status):
 
 
 def main():
-    # Sequential sweep (mirrors compile_test.py): blank id -> gather all
-    # 'compiles' rows, optionally filter by id-prefix / task_family, cap the
-    # run to a count, then train each in order. Re-running skips rows already
-    # at status 'trained', so the sweep is resumable.
+    parser = argparse.ArgumentParser(description="Train NNI-Remake proposals")
+    parser.add_argument("pid", nargs="?", help="Proposal ID (blank = sweep all 'compiles')")
+    parser.add_argument("--auto", action="store_true", help="Non-interactive: use proposal config, no prompts")
+    parser.add_argument("--prefix", help="ID prefix filter (sweep mode)")
+    parser.add_argument("--family", help="Task-family filter (sweep mode)")
+    parser.add_argument("--count", type=int, help="Max models to train (sweep mode)")
+    parser.add_argument("--epochs", type=int, help="Override epochs")
+    parser.add_argument("--batch-size", type=int, help="Override batch size")
+    parser.add_argument("--lr", type=float, help="Override learning rate")
+    parser.add_argument("--optimizer", help="Override optimizer")
+    args = parser.parse_args()
+
+    # Load all proposals
     all_records = []
     try:
         with open(os.path.join(ROOT, "proposals.jsonl"), encoding="utf-8") as fh:
@@ -346,44 +364,32 @@ def main():
     except FileNotFoundError:
         pass
 
-    pid = input("Proposal id (blank = sweep all 'compiles'): ").strip()
-    if pid:
-        target = [r for r in all_records if r.get("id") == pid]
+    if args.pid:
+        target = [r for r in all_records if r.get("id") == args.pid]
         if not target:
-            raise SystemExit(f"proposal {pid!r} not found")
+            raise SystemExit(f"proposal {args.pid!r} not found")
     else:
-        prefix = input("Id prefix filter (blank = none): ").strip()
-        fam = input("Task-family filter (blank = none): ").strip()
         target = [r for r in all_records if r.get("status") == "compiles"]
-        if prefix:
-            target = [r for r in target if r.get("id", "").startswith(prefix)]
-        if fam:
-            target = [r for r in target if r.get("task_family") == fam]
-
-    count_s = input("Max models to train (blank = all): ").strip()
-    count = int(count_s) if count_s else len(target)
-    if count < len(target):
-        target = target[:count]
+        if args.prefix:
+            target = [r for r in target if r.get("id", "").startswith(args.prefix)]
+        if args.family:
+            target = [r for r in target if r.get("task_family") == args.family]
+        if args.count and args.count < len(target):
+            target = target[:args.count]
 
     if not target:
         print("No 'compiles' proposals match the filter.")
         return
 
-    epochs_s = input("Epochs [blank = use this proposal's config]: ").strip()
-    epochs = int(epochs_s) if epochs_s else None
-
-    batch_s = input("Batch size [blank = use this proposal's config]: ").strip()
-    batch_size = int(batch_s) if batch_s else None
-
-    lr_s = input("Learning rate [blank = use this proposal's config]: ").strip()
-    lr = float(lr_s) if lr_s else None
-
-    opt_s = input("Optimizer (adam/adamw/sgd/rmsprop) [blank = use this proposal's config]: ").strip()
-    optimizer = opt_s if opt_s else None
+    # Override config from CLI
+    cli_epochs = args.epochs
+    cli_batch = args.batch_size
+    cli_lr = args.lr
+    cli_opt = args.optimizer
 
     done, skipped = 0, 0
     for r in target:
-        # Re-read current status in case a prior partial run advanced it.
+        # Re-read current status
         try:
             cur = load_proposal(r["id"])
         except KeyError:
@@ -399,9 +405,9 @@ def main():
             skipped += 1
             continue
         try:
-            res = train(r["id"], epochs=epochs, batch_size=batch_size,
-                        lr=lr, optimizer=optimizer)
-            print(f"  {r['id']}: ok  val_acc={res['val_acc']}  above_chance={res['above_chance']}")
+            res = train(r["id"], epochs=cli_epochs, batch_size=cli_batch,
+                        lr=cli_lr, optimizer=cli_opt)
+            print(f"  {r['id']}: ok  val_acc={res['val_acc']:.4f}  above_chance={res['above_chance']}")
             done += 1
         except Exception as e:  # noqa: BLE001
             print(f"  {r['id']}: ERROR {type(e).__name__}: {e}")

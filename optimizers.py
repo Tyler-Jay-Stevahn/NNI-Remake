@@ -887,6 +887,114 @@ class Muon(torch.optim.Optimizer):
         return loss
 
 
+@register("adabelief")
+class AdaBelief(torch.optim.Optimizer):
+    """AdaBelief (Zhuang et al. 2020, NeurIPS) — adapts step size by the "belief" in gradient direction.
+
+    Key idea: Adam uses v_t = beta2 * v_{t-1} + (1-beta2) * g_t^2 (second moment of gradient).
+    AdaBelief uses s_t = beta2 * s_{t-1} + (1-beta2) * (g_t - m_t)^2 + eps
+    where (g_t - m_t)^2 is the variance of the gradient — large when gradient changes
+    direction (low belief), small when consistent (high belief). This yields more stable
+    convergence, especially on noisy or sparse gradients.
+
+    Args:
+        lr: learning rate (default 1e-3)
+        betas: (beta1, beta2) for momentum and belief decay (default (0.9, 0.999))
+        eps: term added to denominator for numerical stability (default 1e-16)
+        weight_decay: decoupled weight decay (AdamW style, default 0)
+        decouple_decay: if True, apply weight decay decoupled from gradient (AdamW style)
+        rectify: if True, apply RAdam-style variance rectification (default False)
+    Reference: https://arxiv.org/abs/2010.07468
+    """
+    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-16,
+                 weight_decay=0.0, decouple_decay=True, rectify=False):
+        if lr < 0:
+            raise ValueError(f"Invalid learning rate: {lr}")
+        if eps < 0:
+            raise ValueError(f"Invalid epsilon: {eps}")
+        if not 0 <= betas[0] < 1 or not 0 <= betas[1] < 1:
+            raise ValueError(f"Invalid betas: {betas}")
+        defaults = dict(lr=lr, betas=betas, eps=eps,
+                        weight_decay=weight_decay, decouple_decay=decouple_decay,
+                        rectify=rectify)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        for group in self.param_groups:
+            lr = group["lr"]
+            beta1, beta2 = group["betas"]
+            eps = group["eps"]
+            weight_decay = group["weight_decay"]
+            decouple_decay = group["decouple_decay"]
+            rectify = group["rectify"]
+
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                grad = p.grad
+                if grad.is_sparse:
+                    raise RuntimeError("AdaBelief does not support sparse gradients")
+
+                state = self.state[p]
+
+                # State initialization
+                if len(state) == 0:
+                    state["step"] = 0
+                    state["exp_avg"] = torch.zeros_like(p, memory_format=torch.preserve_format)
+                    state["exp_var"] = torch.zeros_like(p, memory_format=torch.preserve_format)
+
+                exp_avg = state["exp_avg"]
+                exp_var = state["exp_var"]
+                state["step"] += 1
+                step = state["step"]
+
+                # Decoupled weight decay (AdamW style)
+                if weight_decay != 0 and decouple_decay:
+                    p.mul_(1 - lr * weight_decay)
+
+                # Update biased first moment estimate: m_t = beta1 * m_{t-1} + (1-beta1) * g_t
+                exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
+
+                # AdaBelief: s_t = beta2 * s_{t-1} + (1-beta2) * (g_t - m_t)^2 + eps
+                # (g_t - m_t) is the "surprise" — deviation from expected gradient
+                grad_residual = grad - exp_avg
+                exp_var.mul_(beta2).addcmul_(grad_residual, grad_residual, value=1 - beta2).add_(eps)
+
+                # Bias correction
+                bias_correction1 = 1 - beta1 ** step
+                bias_correction2 = 1 - beta2 ** step
+
+                if rectify:
+                    # RAdam-style variance rectification
+                    rho_inf = 2 / (1 - beta2) - 1
+                    rho_t = rho_inf - 2 * step * beta2 ** step / (1 - beta2 ** step)
+                    if rho_t > 5:
+                        rect = math.sqrt(
+                            (rho_t - 4) * (rho_t - 2) * rho_inf /
+                            ((rho_inf - 4) * (rho_inf - 2) * rho_t)
+                        )
+                    else:
+                        rect = 1.0
+                    step_size = lr * rect / bias_correction1
+                else:
+                    step_size = lr / bias_correction1
+
+                denom = exp_var.sqrt().div_(math.sqrt(bias_correction2))
+                p.addcdiv_(exp_avg, denom, value=-step_size)
+
+                # Coupled weight decay (original Adam style) — only if not decoupled
+                if weight_decay != 0 and not decouple_decay:
+                    p.mul_(1 - lr * weight_decay)
+
+        return loss
+
+
 def _newton_schulz_orthogonalize(G, steps=5, coeffs=None):
     """Approximate the polar-factor / orthogonalization of G via Newton-Schulz.
 

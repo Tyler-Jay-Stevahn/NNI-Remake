@@ -31,16 +31,30 @@ DATASETS = {
 }
 
 
-def _image_transforms(shape):
-    # shape is (C, H, W); ImageFolder / torchvision give (H, W) target size.
+def _image_transforms(shape, augment=False):
+    """Return image transforms. If augment=True, use training augmentations.
+    augment='light' -> RandomHorizontalFlip only (safe for symmetric objects)."""
     _, h, w = shape
+    if augment == "light":
+        return transforms.Compose([
+            transforms.RandomHorizontalFlip(),
+            transforms.Resize((h, w)),
+            transforms.ToTensor(),
+        ])
+    if augment is True:
+        return transforms.Compose([
+            transforms.RandomResizedCrop((h, w), scale=(0.8, 1.0)),
+            transforms.RandomHorizontalFlip(),
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+            transforms.RandomRotation(15),
+            transforms.ToTensor(),
+        ])
     return transforms.Compose([
         transforms.Resize((h, w)),
         transforms.ToTensor(),
     ])
 
-
-def get_dataloader(name, batch_size=32, max_chars=None):
+def get_dataloader(name, batch_size=32, max_chars=None, augment=False):
     """Return (train_loader, val_loader) for the named dataset.
 
     torchvision datasets (mnist, cifar10, cifar100) are downloaded into
@@ -54,15 +68,16 @@ def get_dataloader(name, batch_size=32, max_chars=None):
     if info["loader"] == "text":
         return get_text_dataloader(name, batch_size=batch_size, max_chars=max_chars)
 
-    tfm = _image_transforms(info["shape"])
+    train_tfm = _image_transforms(info["shape"], augment=augment)
+    val_tfm = _image_transforms(info["shape"], augment=False)
 
     if info["loader"] == "torchvision":
         ds_cls = TORCHVISION[name]
         data_dir = os.path.join(ROOT, "data")
         train_full = ds_cls(root=data_dir, train=True,
-                            download=True, transform=tfm)
+                            download=True, transform=train_tfm)
         test_ds = ds_cls(root=data_dir, train=False,
-                         download=True, transform=tfm)
+                         download=True, transform=val_tfm)
         n_val = int(0.1 * len(train_full))
         train_ds, val_ds = random_split(train_full, [len(train_full) - n_val, n_val])
         return (DataLoader(train_ds, batch_size=batch_size, shuffle=True),
@@ -70,11 +85,13 @@ def get_dataloader(name, batch_size=32, max_chars=None):
 
     elif info["loader"] == "local":
         if name == "Recycling-Data":
-            full = tv_datasets.ImageFolder(recycling_data, transform=tfm)
+            full = tv_datasets.ImageFolder(recycling_data, transform=val_tfm)
         else:
             raise ValueError(f"no local loader for dataset {name!r}")
         n_val = int(0.1 * len(full))
         train_ds, val_ds = random_split(full, [len(full) - n_val, n_val])
+        train_ds.dataset.transform = train_tfm
+        val_ds.dataset.transform = val_tfm
         return (DataLoader(train_ds, batch_size=batch_size, shuffle=True),
                 DataLoader(val_ds, batch_size=batch_size, shuffle=False))
 

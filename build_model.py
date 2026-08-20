@@ -26,6 +26,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import activations
+import normalizations
+import regularizations
+
 # ---------------------------------------------------------------------------
 # Dataset table: modality, tensor shape, class/cluster count, vocabulary.
 # ---------------------------------------------------------------------------
@@ -364,6 +368,14 @@ def _block(block: dict, in_ch: int):
         return GroupNormAct(in_ch, block.get("groups", 32)), in_ch
     if t == "silu":
         return nn.SiLU(), in_ch
+    if t == "activation":
+        return activations.make(block["name"], in_ch), in_ch
+    if t == "norm":
+        return normalizations.make(block["name"], in_ch, 2), in_ch
+    if t == "regularize":
+        kw = {k: v for k, v in block.items()
+              if k not in ("type", "name", "novel", "definition", "refs", "note")}
+        return regularizations.make_regularizer(block["name"], in_ch, **kw), in_ch
     if t == "attention":
         return Attention2d(in_ch, block.get("heads", 4)), in_ch
     if t == "downsample":
@@ -428,6 +440,14 @@ def _block1d(block: dict, in_ch: int):
         return nn.BatchNorm1d(in_ch), in_ch
     if t == "relu":
         return nn.ReLU(), in_ch
+    if t == "activation":
+        return activations.make(block["name"], in_ch), in_ch
+    if t == "norm":
+        return normalizations.make(block["name"], in_ch, 1), in_ch
+    if t == "regularize":
+        kw = {k: v for k, v in block.items()
+              if k not in ("type", "name", "novel", "definition", "refs", "note")}
+        return regularizations.make_regularizer(block["name"], in_ch, **kw), in_ch
     if t == "maxpool1d":
         return nn.MaxPool1d(block.get("kernel", 2), block.get("stride", 2)), in_ch
     raise ValueError(f"unknown 1-D layer type: {t!r}")
@@ -451,6 +471,14 @@ def _block_dense(block: dict, in_dim: int):
         return nn.Linear(in_dim, out), out
     if t == "relu":
         return nn.ReLU(), in_dim
+    if t == "activation":
+        return activations.make(block["name"], in_dim), in_dim
+    if t == "norm":
+        return normalizations.make(block["name"], in_dim, 0), in_dim
+    if t == "regularize":
+        kw = {k: v for k, v in block.items()
+              if k not in ("type", "name", "novel", "definition", "refs", "note")}
+        return regularizations.make_regularizer(block["name"], in_dim, **kw), in_dim
     if t == "layernorm":
         return nn.LayerNorm(in_dim), in_dim
     if t == "batchnorm":

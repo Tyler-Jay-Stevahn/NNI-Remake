@@ -25,6 +25,10 @@ import torch.nn.functional as F
 import build_model
 import datasets
 import optimizers
+import losses
+import schedulers
+import initializers
+import regularizations
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = HERE if os.path.exists(os.path.join(HERE, "proposals.jsonl")) else os.path.dirname(HERE)
@@ -67,11 +71,13 @@ def count_params(model):
     return sum(p.numel() for p in model.parameters())
 
 
-def evaluate(model, loader, device):
+def evaluate(model, loader, device, loss_fn=None):
     """Return (avg_loss, accuracy).
 
     Handles 2-D classification output (B, n_classes) and 3-D text-gen output
-    (B, vocab, T) where the target is (B, T) of token ids.
+    (B, vocab, T) where the target is (B, T) of token ids. When a custom
+    loss_fn is supplied it is used for the loss sum (reduction="sum");
+    otherwise the loss is standard cross-entropy.
     """
     model.eval()
     correct, total, loss_sum = 0, 0, 0.0
@@ -79,7 +85,10 @@ def evaluate(model, loader, device):
         for x, y in loader:
             x, y = x.to(device), y.to(device)
             out = model(x)
-            loss_sum += F.cross_entropy(out, y, reduction="sum").item()
+            if loss_fn is not None:
+                loss_sum += loss_fn(out, y, reduction="sum").item()
+            else:
+                loss_sum += F.cross_entropy(out, y, reduction="sum").item()
             if out.dim() == 3:
                 # text-gen: per-token accuracy over the sequence.
                 correct += (out.argmax(1) == y).sum().item()
@@ -121,6 +130,41 @@ def train(pid, epochs=None, batch_size=None, lr=None, optimizer=None):
 
     opt_name = optimizer.lower()
 
+    # --- loss resolution ---------------------------------------------------
+    # A proposal may set "loss": "custom:<name>". Resolution mirrors the
+    # optimizer path; unknown custom names are a hard error. Stock CE is used
+    # when no custom loss is declared.
+    cfg_loss = rec.get("loss")
+    if cfg_loss:
+        loss_name = str(cfg_loss).lower()
+    else:
+        loss_name = "ce"
+    if loss_name.startswith("custom:"):
+        cname = loss_name[len("custom:"):]
+        loss_cls = losses.get(cname)
+        loss_kwargs = rec.get("loss_kwargs") or {}
+        loss_fn = loss_cls(**loss_kwargs)
+        print(f"  [custom loss] {cname} kwargs={loss_kwargs}", flush=True)
+    else:
+        # stock cross-entropy
+        loss_fn = None  # F.cross_entropy will be used directly
+
+    # --- scheduler resolution ---------------------------------------------
+    # A proposal may set "scheduler": "custom:<name>". Returns an LR factor
+    # each batch; multiplied by the base LR. Schedulers that manage their own
+    # LR (custom optimizers flagged .manages_lr) are exempt.
+    cfg_sched = rec.get("scheduler")
+    sched_fn = None
+    sched_kwargs = {}
+    total_steps = epochs * len(train_dl) if (epochs and train_dl) else 1
+    if cfg_sched:
+        sname = str(cfg_sched).lower()
+        if sname.startswith("custom:"):
+            sc = sname[len("custom:"):]
+            sched_fn = schedulers.get(sc)
+            sched_kwargs = rec.get("scheduler_kwargs") or {}
+            print(f"  [custom scheduler] {sc} kwargs={sched_kwargs}", flush=True)
+
     # Custom optimizer strategy: "custom:<name>" -> look up in optimizers.REGISTRY.
     # Unknown custom name is a hard error (no silent fallback). Stock optimizers
     # ignore optimizer_kwargs (only forwarded to custom classes).
@@ -143,6 +187,26 @@ def train(pid, epochs=None, batch_size=None, lr=None, optimizer=None):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     model = build_model.build_model(spec).to(device)
+
+    # --- custom initializer (Tier B) --------------------------------------
+    cfg_init = rec.get("initializer")
+    if cfg_init:
+        iname = str(cfg_init).lower()
+        if iname.startswith("custom:"):
+            init_name = iname[len("custom:"):]
+            initializers.apply(init_name, model)
+            print(f"  [custom initializer] {init_name}", flush=True)
+
+    # --- custom regularization (Tier B) -----------------------------------
+    reg_list = rec.get("regularization") or []
+    if isinstance(reg_list, str):
+        reg_list = [reg_list]
+    for reg in reg_list:
+        rname = str(reg).lower()
+        if rname == "spectral_norm":
+            regularizations.apply_spectral_norm(model)
+            print("  [regularization] spectral_norm", flush=True)
+
     n_params = count_params(model)
 
     train_dl, val_dl = datasets.get_dataloader(dataset, batch_size=batch_size)
@@ -157,11 +221,25 @@ def train(pid, epochs=None, batch_size=None, lr=None, optimizer=None):
     def closure(x, y):
         model.zero_grad()
         out = model(x)
-        loss = F.cross_entropy(out, y)
+        if loss_fn is not None:
+            loss = loss_fn(out, y, reduction="mean")
+        else:
+            loss = F.cross_entropy(out, y)
         # Sophia needs the graph alive for its Hutchinson HVP; retain it on the
         # closure path (LBFGS also re-evaluates, so retention is safe for both).
         loss.backward(retain_graph=needs_closure)
         return loss
+
+    # Custom LR scheduler (Tier A): scale base LR per batch. Custom optimizers
+    # that own their LR (flagged .manages_lr) are exempt so we don't double-scale.
+    opt_manages_lr = getattr(opt, "manages_lr", False)
+
+    def _apply_scheduler(step_idx):
+        if sched_fn is None or opt_manages_lr:
+            return
+        factor = sched_fn(step_idx, total_steps, **sched_kwargs)
+        for g in opt.param_groups:
+            g["lr"] = opt.defaults["lr"] * factor
 
     print(f"Training {pid} on {dataset}  params={n_params}  "
           f"opt={opt_name}  lr={lr}  epochs={epochs}  batch={batch_size}", flush=True)
@@ -170,6 +248,7 @@ def train(pid, epochs=None, batch_size=None, lr=None, optimizer=None):
               flush=True)
     start = time.time()
     n_batches = len(train_dl)
+    gstep = 0
     for ep in range(epochs):
         model.train()
         running_loss = 0.0
@@ -181,6 +260,8 @@ def train(pid, epochs=None, batch_size=None, lr=None, optimizer=None):
             else:
                 loss = closure(x, y)
                 opt.step()
+            _apply_scheduler(gstep)
+            gstep += 1
             running_loss += (loss.item() if torch.is_tensor(loss) else 0.0)
             # Live batch progress (carriage-return overwrite, no external deps).
             print(f"\r[{pid}] epoch {ep + 1}/{epochs}  "
@@ -194,10 +275,10 @@ def train(pid, epochs=None, batch_size=None, lr=None, optimizer=None):
               flush=True)
     train_time_s = time.time() - start
 
-    val_loss, val_acc = evaluate(model, val_dl, device)
+    val_loss, val_acc = evaluate(model, val_dl, device, loss_fn=loss_fn)
     # approximate train loss from the last train step is unreliable; report val.
     # Re-run a quick train-set eval for a train_loss estimate.
-    train_loss, _ = evaluate(model, train_dl, device)
+    train_loss, _ = evaluate(model, train_dl, device, loss_fn=loss_fn)
     inference_ms = (train_time_s / max(len(train_dl), 1)) * 1000.0
 
     # Chance baseline: image/text classification uses n_classes; a text-gen
@@ -223,6 +304,8 @@ def train(pid, epochs=None, batch_size=None, lr=None, optimizer=None):
         "lr": round(opt_lr, 6),
         "epochs": epochs,
         "batch": batch_size,
+        "loss": loss_name,
+        "scheduler": sched_fn.__name__ if sched_fn is not None else "constant",
     }
 
     with open(RESULTS, "a", encoding="utf-8") as fh:

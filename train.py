@@ -31,11 +31,23 @@ ROOT = HERE if os.path.exists(os.path.join(HERE, "proposals.jsonl")) else os.pat
 RESULTS = os.path.join(ROOT, "tests", "results.jsonl")
 
 # Optimizer-name -> torch optimizer class. Unknown names fall back to Adam.
+# Tier-1 torch-native optimizers registered here (no custom class needed).
+# NOTE: lbfgs requires a closure-based step (it re-evaluates the loss); the
+# current train loop calls opt.step() with no closure, so lbfgs is selectable
+# but will not train correctly without a loop change.
 OPT_MAP = {
     "adam": torch.optim.Adam,
     "adamw": torch.optim.AdamW,
     "sgd": torch.optim.SGD,
     "rmsprop": torch.optim.RMSprop,
+    "nadam": torch.optim.NAdam,
+    "radam": torch.optim.RAdam,
+    "adagrad": torch.optim.Adagrad,
+    "adamax": torch.optim.Adamax,
+    "adadelta": torch.optim.Adadelta,
+    "rprop": torch.optim.Rprop,
+    "asgd": torch.optim.ASGD,
+    "lbfgs": torch.optim.LBFGS,
 }
 
 
@@ -137,8 +149,25 @@ def train(pid, epochs=None, batch_size=None, lr=None, optimizer=None):
     opt = opt_cls(model.parameters(), lr=lr, **opt_kwargs)
     opt_lr = opt.defaults["lr"]
 
+    # LBFGS and Sophia need a closure that re-runs forward/backward (LBFGS
+    # re-evaluates the loss; Sophia estimates the diagonal Hessian). All other
+    # optimizers use the plain opt.step() path with no extra cost.
+    needs_closure = isinstance(opt, (torch.optim.LBFGS, optimizers.Sophia))
+
+    def closure(x, y):
+        model.zero_grad()
+        out = model(x)
+        loss = F.cross_entropy(out, y)
+        # Sophia needs the graph alive for its Hutchinson HVP; retain it on the
+        # closure path (LBFGS also re-evaluates, so retention is safe for both).
+        loss.backward(retain_graph=needs_closure)
+        return loss
+
     print(f"Training {pid} on {dataset}  params={n_params}  "
           f"opt={opt_name}  lr={lr}  epochs={epochs}  batch={batch_size}", flush=True)
+    if needs_closure:
+        print(f"  [closure step] {opt_name} re-runs forward/backward per step",
+              flush=True)
     start = time.time()
     n_batches = len(train_dl)
     for ep in range(epochs):
@@ -147,10 +176,12 @@ def train(pid, epochs=None, batch_size=None, lr=None, optimizer=None):
         for bi, (x, y) in enumerate(train_dl, 1):
             x, y = x.to(device), y.to(device)
             opt.zero_grad()
-            loss = F.cross_entropy(model(x), y)
-            loss.backward()
-            opt.step()
-            running_loss += loss.item()
+            if needs_closure:
+                loss = opt.step(lambda: closure(x, y))
+            else:
+                loss = closure(x, y)
+                opt.step()
+            running_loss += (loss.item() if torch.is_tensor(loss) else 0.0)
             # Live batch progress (carriage-return overwrite, no external deps).
             print(f"\r[{pid}] epoch {ep + 1}/{epochs}  "
                   f"batch {bi}/{n_batches}  loss={loss.item():.4f}",

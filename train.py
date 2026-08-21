@@ -193,8 +193,9 @@ def train(pid, epochs=None, batch_size=None, lr=None, optimizer=None):
         opt_kwargs = {}
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-
     model = build_model.build_model(spec).to(device)
+
+    n_params = count_params(model)
 
     # --- custom initializer (Tier B) --------------------------------------
     cfg_init = rec.get("initializer")
@@ -215,10 +216,9 @@ def train(pid, epochs=None, batch_size=None, lr=None, optimizer=None):
             regularizations.apply_spectral_norm(model)
             print("  [regularization] spectral_norm", flush=True)
 
-    n_params = count_params(model)
-
     augment = spec.get("augment", False)
-    train_dl, val_dl = datasets.get_dataloader(dataset, batch_size=batch_size, augment=augment)
+    augment_kwargs = spec.get("augment_kwargs", {})
+    train_dl, val_dl = datasets.get_dataloader(dataset, batch_size=batch_size, augment=augment, augment_kwargs=augment_kwargs)
     opt = opt_cls(model.parameters(), lr=lr, **opt_kwargs)
     opt_lr = opt.defaults["lr"]
 
@@ -228,19 +228,34 @@ def train(pid, epochs=None, batch_size=None, lr=None, optimizer=None):
     # LBFGS and Sophia need a closure that re-runs forward/backward (LBFGS
     # re-evaluates the loss; Sophia estimates the diagonal Hessian). All other
     # optimizers use the plain opt.step() path with no extra cost.
-    needs_closure = isinstance(opt, (torch.optim.LBFGS, optimizers.Sophia))
+    is_lbfgs = isinstance(opt, torch.optim.LBFGS)
+    is_sophia = isinstance(opt, optimizers.Sophia)
+    needs_closure = is_lbfgs or is_sophia
 
-    def closure(x, y):
-        model.zero_grad()
-        out = model(x)
-        if loss_fn is not None:
-            loss = loss_fn(out, y, reduction="mean")
-        else:
-            loss = F.cross_entropy(out, y)
-        # Sophia needs the graph alive for its Hutchinson HVP; retain it on the
-        # closure path (LBFGS also re-evaluates, so retention is safe for both).
-        loss.backward(retain_graph=needs_closure)
-        return loss
+    def make_closure(x, y):
+        """Return a closure suitable for the optimizer type."""
+        if is_lbfgs:
+            # LBFGS: standard closure, no create_graph. LBFGS handles zero_grad.
+            def closure():
+                out = model(x)
+                if loss_fn is not None:
+                    loss = loss_fn(out, y, reduction="mean")
+                else:
+                    loss = F.cross_entropy(out, y)
+                loss.backward()
+                return loss
+            return closure
+        # Sophia: closure must preserve graph for HVP (create_graph=True).
+        def closure():
+            model.zero_grad()
+            out = model(x)
+            if loss_fn is not None:
+                loss = loss_fn(out, y, reduction="mean")
+            else:
+                loss = F.cross_entropy(out, y)
+            loss.backward(create_graph=True, retain_graph=True)
+            return loss
+        return closure
 
     # Custom LR scheduler (Tier A): scale base LR per batch. Custom optimizers
     # that own their LR (flagged .manages_lr) are exempt so we don't double-scale.
@@ -266,11 +281,20 @@ def train(pid, epochs=None, batch_size=None, lr=None, optimizer=None):
         running_loss = 0.0
         for bi, (x, y) in enumerate(train_dl, 1):
             x, y = x.to(device), y.to(device)
-            opt.zero_grad()
-            if needs_closure:
-                loss = opt.step(lambda: closure(x, y))
+            if is_lbfgs:
+                # LBFGS handles zero_grad internally in its closure calls.
+                loss = opt.step(make_closure(x, y))
+            elif is_sophia:
+                # Sophia needs closure with create_graph; zero_grad inside closure.
+                loss = opt.step(make_closure(x, y))
             else:
-                loss = closure(x, y)
+                opt.zero_grad()
+                out = model(x)
+                if loss_fn is not None:
+                    loss = loss_fn(out, y, reduction="mean")
+                else:
+                    loss = F.cross_entropy(out, y)
+                loss.backward()
                 opt.step()
             _apply_scheduler(gstep)
             gstep += 1
@@ -329,6 +353,59 @@ def train(pid, epochs=None, batch_size=None, lr=None, optimizer=None):
     return result
 
 
+def _interactive_filter(records):
+    """Prompt user for sweep filters and return matching proposals."""
+    compiles = [r for r in records if r.get("status") == "compiles"]
+    if not compiles:
+        print("No proposals with status 'compiles'.")
+        return []
+
+    families = sorted({r.get("task_family", "") for r in compiles if r.get("task_family")})
+    print(f"\nFound {len(compiles)} proposals with status 'compiles'")
+    print(f"Task families: {', '.join(families) if families else 'none'}")
+
+    # Task family filter
+    family = input("Task family filter (blank = all): ").strip()
+    if family:
+        compiles = [r for r in compiles if r.get("task_family") == family]
+        if not compiles:
+            print(f"No 'compiles' proposals in family {family!r}.")
+            return []
+
+    # Prefix filter
+    prefix = input("ID prefix filter (blank = all): ").strip()
+    if prefix:
+        compiles = [r for r in compiles if r.get("id", "").startswith(prefix)]
+        if not compiles:
+            print(f"No 'compiles' proposals with prefix {prefix!r}.")
+            return []
+
+    # Count limit
+    count_in = input(f"Max models to train (blank = all {len(compiles)}): ").strip()
+    if count_in:
+        try:
+            count = int(count_in)
+            if count < len(compiles):
+                compiles = compiles[:count]
+        except ValueError:
+            pass
+
+    # Training config overrides
+    print("\nTraining overrides (blank = use proposal config):")
+    epochs_in = input("  Epochs: ").strip()
+    batch_in = input("  Batch size: ").strip()
+    lr_in = input("  Learning rate: ").strip()
+    opt_in = input("  Optimizer: ").strip()
+
+    # Store overrides on records for the train loop
+    for r in compiles:
+        r["_cli_epochs"] = int(epochs_in) if epochs_in else None
+        r["_cli_batch"] = int(batch_in) if batch_in else None
+        r["_cli_lr"] = float(lr_in) if lr_in else None
+        r["_cli_opt"] = opt_in if opt_in else None
+
+    return compiles
+
 def _set_status(pid, status):
     """Rewrite proposals.jsonl setting `status` for one proposal id."""
     path = os.path.join(ROOT, "proposals.jsonl")
@@ -369,23 +446,21 @@ def main():
         if not target:
             raise SystemExit(f"proposal {args.pid!r} not found")
     else:
-        target = [r for r in all_records if r.get("status") == "compiles"]
-        if args.prefix:
-            target = [r for r in target if r.get("id", "").startswith(args.prefix)]
-        if args.family:
-            target = [r for r in target if r.get("task_family") == args.family]
-        if args.count and args.count < len(target):
-            target = target[:args.count]
+        # Interactive mode: prompt for filters unless --auto
+        if not args.auto:
+            target = _interactive_filter(all_records)
+        else:
+            target = [r for r in all_records if r.get("status") == "compiles"]
+            if args.prefix:
+                target = [r for r in target if r.get("id", "").startswith(args.prefix)]
+            if args.family:
+                target = [r for r in target if r.get("task_family") == args.family]
+            if args.count and args.count < len(target):
+                target = target[:args.count]
 
     if not target:
         print("No 'compiles' proposals match the filter.")
         return
-
-    # Override config from CLI
-    cli_epochs = args.epochs
-    cli_batch = args.batch_size
-    cli_lr = args.lr
-    cli_opt = args.optimizer
 
     done, skipped = 0, 0
     for r in target:
@@ -404,6 +479,11 @@ def main():
             print(f"  {r['id']}: status {cur.get('status')!r}, not 'compiles' (skipped)")
             skipped += 1
             continue
+        # Per-record overrides (interactive mode) take precedence over CLI args
+        cli_epochs = r.get("_cli_epochs", args.epochs)
+        cli_batch = r.get("_cli_batch", args.batch_size)
+        cli_lr = r.get("_cli_lr", args.lr)
+        cli_opt = r.get("_cli_opt", args.optimizer)
         try:
             res = train(r["id"], epochs=cli_epochs, batch_size=cli_batch,
                         lr=cli_lr, optimizer=cli_opt)

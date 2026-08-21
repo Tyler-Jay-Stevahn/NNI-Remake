@@ -1,8 +1,10 @@
 import os
-
+import numpy as np
 import torch
-from torch.utils.data import DataLoader, random_split
+import torch.nn.functional as F
 from torchvision import datasets as tv_datasets, transforms
+from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import random_split
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = HERE if os.path.exists(os.path.join(HERE, "proposals.jsonl")) else os.path.dirname(HERE)
@@ -53,8 +55,35 @@ def _image_transforms(shape, augment=False):
         transforms.Resize((h, w)),
         transforms.ToTensor(),
     ])
+# ---------------------------------------------------------------------------
+# Mixup augmentation wrapper
+# ---------------------------------------------------------------------------
+class MixupDataset(Dataset):
+    """Wraps a dataset to apply mixup augmentation on-the-fly."""
+    def __init__(self, dataset, alpha=0.2, num_classes=11):
+        self.dataset = dataset
+        self.alpha = alpha
+        self.num_classes = num_classes
 
-def get_dataloader(name, batch_size=32, max_chars=None, augment=False):
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        x1, y1 = self.dataset[idx]
+        idx2 = torch.randint(0, len(self.dataset), ()).item()
+        x2, y2 = self.dataset[idx2]
+
+        lam = np.random.beta(self.alpha, self.alpha) if self.alpha > 0 else 1.0
+        x = lam * x1 + (1 - lam) * x2
+
+        # Soft labels for mixup
+        y1_oh = F.one_hot(torch.tensor(y1), self.num_classes).float()
+        y2_oh = F.one_hot(torch.tensor(y2), self.num_classes).float()
+        y = lam * y1_oh + (1 - lam) * y2_oh
+
+        return x, y
+
+def get_dataloader(name, batch_size=32, max_chars=None, augment=False, augment_kwargs=None):
     """Return (train_loader, val_loader) for the named dataset.
 
     torchvision datasets (mnist, cifar10, cifar100) are downloaded into
@@ -64,12 +93,15 @@ def get_dataloader(name, batch_size=32, max_chars=None, augment=False):
     much of the corpus is tokenised — used by the compile smoke-test).
     """
     info = DATASETS[name]
+    augment_kwargs = augment_kwargs or {}
 
     if info["loader"] == "text":
         return get_text_dataloader(name, batch_size=batch_size, max_chars=max_chars)
 
     train_tfm = _image_transforms(info["shape"], augment=augment)
     val_tfm = _image_transforms(info["shape"], augment=False)
+
+    num_classes = info.get("classes", 10)
 
     if info["loader"] == "torchvision":
         ds_cls = TORCHVISION[name]
@@ -80,6 +112,9 @@ def get_dataloader(name, batch_size=32, max_chars=None, augment=False):
                          download=True, transform=val_tfm)
         n_val = int(0.1 * len(train_full))
         train_ds, val_ds = random_split(train_full, [len(train_full) - n_val, n_val])
+        if augment == "mixup":
+            alpha = augment_kwargs.get("alpha", 0.2)
+            train_ds = MixupDataset(train_ds, alpha=alpha, num_classes=num_classes)
         return (DataLoader(train_ds, batch_size=batch_size, shuffle=True),
                 DataLoader(val_ds, batch_size=batch_size, shuffle=False))
 
@@ -92,6 +127,9 @@ def get_dataloader(name, batch_size=32, max_chars=None, augment=False):
         train_ds, val_ds = random_split(full, [len(full) - n_val, n_val])
         train_ds.dataset.transform = train_tfm
         val_ds.dataset.transform = val_tfm
+        if augment == "mixup":
+            alpha = augment_kwargs.get("alpha", 0.2)
+            train_ds = MixupDataset(train_ds, alpha=alpha, num_classes=num_classes)
         return (DataLoader(train_ds, batch_size=batch_size, shuffle=True),
                 DataLoader(val_ds, batch_size=batch_size, shuffle=False))
 

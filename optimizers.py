@@ -63,9 +63,10 @@ class MyMomentum(torch.optim.Optimizer):
     with real strategies as needed.
     """
 
-    def __init__(self, params, lr=1e-3, momentum=0.9):
+    def __init__(self, params, lr=1e-3, momentum=0.9, weight_decay=None):
         defaults = dict(lr=lr, momentum=momentum)
         super().__init__(params, defaults)
+        self.weight_decay = weight_decay
 
     def step(self, closure=None):
         loss = None
@@ -78,6 +79,8 @@ class MyMomentum(torch.optim.Optimizer):
                 if p.grad is None:
                     continue
                 g = p.grad.data
+                if self.weight_decay:
+                    g = g.add(p.data, alpha=self.weight_decay)
                 state = self.state[p]
                 if "buf" not in state:
                     state["buf"] = torch.zeros_like(p.data)

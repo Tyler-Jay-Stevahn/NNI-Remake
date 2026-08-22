@@ -61,7 +61,20 @@ _DEFAULT = {"modality": "image", "shape": (3, 16, 16), "classes": 10}
 
 
 def dataset_info(dataset):
-    return dict(_DEFAULT, **DATASETS.get(dataset, {}))
+    info = dict(_DEFAULT, **DATASETS.get(dataset, {}))
+    if dataset not in DATASETS:
+        # datasets.py is the single source of truth; fall back to its table
+        # for entries added after this legacy copy. Prefer the "nni_datasets"
+        # alias: after an HF text load the name "datasets" is rebound to the
+        # HuggingFace package (see datasets._import_hf_load_dataset).
+        import sys
+        registry = sys.modules.get("nni_datasets")
+        if registry is None:
+            import datasets as registry
+        extra = registry.DATASETS.get(dataset, {})
+        info.update({k: extra[k] for k in ("modality", "shape", "classes", "vocab")
+                     if k in extra})
+    return info
 
 
 def input_shape(dataset):
@@ -226,13 +239,23 @@ class GroupNormAct(nn.Module):
 
 class ResBlock2d(nn.Module):
     """Residual block used by the IMPALA RL stem: 3x3 conv + GroupNorm + ReLU
-    with a skip connection. Input and output channels match."""
-    def __init__(self, channels, kernel=3):
+    with a skip connection. Input and output channels match.
+
+    norm="batchnorm" swaps the two GroupNorms for BatchNorm2d — the standard
+    choice for CIFAR-scale classification (GroupNorm(1, C) jointly normalizes
+    all channels per sample and measurably underperforms BN there). Default
+    "groupnorm" preserves the IMPALA-stem behaviour exactly.
+    """
+    def __init__(self, channels, kernel=3, norm="groupnorm"):
         super().__init__()
         self.conv1 = nn.Conv2d(channels, channels, kernel, padding=kernel // 2)
         self.conv2 = nn.Conv2d(channels, channels, kernel, padding=kernel // 2)
-        self.norm1 = nn.GroupNorm(1, channels)
-        self.norm2 = nn.GroupNorm(1, channels)
+        if norm == "batchnorm":
+            self.norm1 = nn.BatchNorm2d(channels)
+            self.norm2 = nn.BatchNorm2d(channels)
+        else:
+            self.norm1 = nn.GroupNorm(1, channels)
+            self.norm2 = nn.GroupNorm(1, channels)
         self.act = nn.ReLU()
 
     def forward(self, x):
@@ -383,7 +406,8 @@ def _block(block: dict, in_ch: int):
     if t == "upsample":
         return Upsample2d(in_ch), in_ch
     if t == "residual":
-        return ResBlock2d(in_ch, block.get("kernel", 3)), in_ch
+        return ResBlock2d(in_ch, block.get("kernel", 3),
+                          norm=block.get("norm", "groupnorm")), in_ch
     if t == "relu":
         return nn.ReLU(), in_ch
     if t == "maxpool2d":

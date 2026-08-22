@@ -154,7 +154,10 @@ BASE = """<!doctype html>
   .dropdown-menu { display:none; position:absolute; top:100%; left:0; margin-top:10px;
                    background:var(--card); border:1px solid var(--line); border-radius:8px;
                    padding:6px; min-width:210px; z-index:50; flex-direction:column;
+                   max-height:min(60vh, 420px); overflow-y:auto; overscroll-behavior:contain;
                    box-shadow:0 8px 24px rgba(0,0,0,.4); }
+  .dropdown-menu::-webkit-scrollbar { width:8px; }
+  .dropdown-menu::-webkit-scrollbar-thumb { background:#2c3442; border-radius:4px; }
   .dropdown:hover .dropdown-menu, .dropdown:focus-within .dropdown-menu { display:flex; }
   .dropdown-menu a { padding:6px 9px; border-radius:5px; color:var(--ink); font-size:13px; }
   .dropdown-menu a:hover { background:#1b212b; text-decoration:none; color:var(--accent); }
@@ -185,6 +188,7 @@ def build_nav():
         ("/verification", "Verification"),
         ("/smoke", "Lifecycle"),
         ("/models", "All models"),
+        ("/curves", "Curves"),
     ]
     items = "".join(f"<a href='{href}'>{esc(label)}</a>"
                     for href, label in base_links)
@@ -250,11 +254,12 @@ def pcoord_chart(rows, dims, fixed_max=None, palette=None, col_w=90,
     rows:    list of dicts (each must have 'id'); plotted in order.
     dims:    list of (key, label, getter) where getter(row) -> value.
     fixed_max: optional {key: max} to pin a column's scale (others auto-max).
-    palette: line colours cycled when color_by/group_by is None.
-    color_by: optional fn(row) -> css colour (e.g. colour by family).
-    group_by: optional fn(row) -> str group (e.g. model). When set, lines are
-              coloured per distinct group and tagged with data-group so a
-              client-side dropdown can filter them.
+    palette: line colours cycled when colouring by group.
+    color_by: optional fn(row) -> css colour.
+    group_by: optional fn(row) -> str group; lines coloured per distinct group
+              and tagged data-group for the client-side filter dropdown.
+    With neither set, every proposal id gets its own stable hue (golden-angle
+    spaced) so lines are distinguishable per ID.
     Returns (chart_html, vlegend_html, catlegend_html).
     """
     dims = sorted(dims, key=lambda d: d[1].lower())
@@ -268,7 +273,6 @@ def pcoord_chart(rows, dims, fixed_max=None, palette=None, col_w=90,
                     if isinstance(v, (int, float)) and not isinstance(v, bool)]
             dim_max[key] = max(vals) if vals else 1
 
-    # group colours (for group_by)
     groups = []
     if group_by:
         seen = set()
@@ -277,9 +281,33 @@ def pcoord_chart(rows, dims, fixed_max=None, palette=None, col_w=90,
             if g not in seen:
                 seen.add(g)
                 groups.append(g)
+
     def group_color(r):
         g = str(group_by(r))
-        return palette[groups.index(g) % len(palette)]
+        i = groups.index(g)
+        # First len(palette) groups keep the house colours; further groups
+        # get deterministic golden-angle hues instead of wrapping around.
+        if i < len(palette):
+            return palette[i]
+        hue = ((i - len(palette)) * 137.508 + 47.0) % 360.0
+        return f"hsl({hue:.0f},72%,64%)"
+
+    # Default colouring: one stable hue per proposal id (golden-angle spacing
+    # keeps neighbouring hues distinguishable even with many rows).
+    id_hue = {}
+    if not color_by and not group_by:
+        for i, rid in enumerate(sorted(str(r.get("id")) for r in rows)):
+            id_hue[rid] = (i * 137.508) % 360.0
+
+    def id_color(r):
+        return f"hsl({id_hue[str(r.get('id'))]:.0f},72%,64%)"
+
+    def row_color(r):
+        if color_by:
+            return color_by(r)
+        if group_by:
+            return group_color(r)
+        return id_color(r)
 
     PLOT_H, TOP, PADX = 320, 56, 40
     n = len(dims)
@@ -296,14 +324,9 @@ def pcoord_chart(rows, dims, fixed_max=None, palette=None, col_w=90,
         return TOP + (1.0 - frac) * PLOT_H
 
     paths = []
-    for vi, r in enumerate(rows):
+    for r in rows:
         rid = r.get("id")
-        if color_by:
-            color = color_by(r)
-        elif group_by:
-            color = group_color(r)
-        else:
-            color = palette[vi % len(palette)]
+        color = row_color(r)
         gtag = f" data-group='{esc(str(group_by(r)))}'" if group_by else ""
         gcls = " pc-line" if group_by else ""
         pts = []
@@ -367,14 +390,13 @@ def pcoord_chart(rows, dims, fixed_max=None, palette=None, col_w=90,
                    + "".join(f"<span><span class='sw' style='background:"
                              f"{palette[i % len(palette)]}'></span>{esc(g)}</span>"
                              for i, g in enumerate(groups)) + "</div>")
+    elif len(rows) <= 12:
+        vlegend = ("<div class='vlegend'>"
+                   + "".join(f"<span><span class='sw' style='background:"
+                             f"{id_color(r)}'></span>{esc(r.get('id'))}</span>"
+                             for r in rows) + "</div>")
     else:
-        if len(rows) <= 12:
-            vlegend = ("<div class='vlegend'>"
-                       + "".join(f"<span><span class='sw' style='background:"
-                                 f"{palette[i % len(palette)]}'></span>{esc(r.get('id'))}</span>"
-                                 for i, r in enumerate(rows)) + "</div>")
-        else:
-            vlegend = ""
+        vlegend = ""
 
     catlegend = (
         "<div class='catlegend'>"
@@ -851,7 +873,7 @@ def page_family(fam):
     fixed_max = {"epochs": 3, "learning rate": 0.01, "train samples": 600,
                  "val accuracy": 1.0, "val samples": 200}
     chart, vlegend, catlegend = pcoord_chart(
-        rows, dims, fixed_max=fixed_max, col_w=90, color_by=lambda p: "#3fb950",
+        rows, dims, fixed_max=fixed_max, col_w=90,
         note="One line per proposal in this family; columns are the run "
              "constants (SGD, 3 epochs, 600/200 split — shared by the real-data "
              "runner) plus measured metrics and architecture choices pulled "
@@ -945,6 +967,64 @@ TASK_DESC = {
 }
 
 
+def _sparkline(curve, key, w=280, h=64, color="#4da3ff"):
+    """Inline SVG polyline of curve[key] over epochs (self-normalising)."""
+    ys = [p.get(key) for p in curve if isinstance(p.get(key), (int, float))]
+    if len(ys) < 2:
+        return "<span class='muted'>n/a</span>"
+    lo, hi = min(ys), max(ys)
+    rng = (hi - lo) or 1.0
+    n = len(ys)
+    pts = " ".join(
+        f"{x * w / (n - 1):.1f},{h - 4 - (v - lo) / rng * (h - 8):.1f}"
+        for x, v in enumerate(ys))
+    return (f"<svg width='{w}' height='{h}' role='img'>"
+            f"<polyline fill='none' stroke='{color}' stroke-width='1.6' "
+            f"points='{pts}'/></svg>")
+
+
+def page_curves():
+    """Per-epoch training trajectories for every run that recorded a curve."""
+    proposals = index_by(load_jsonl("proposals.jsonl"), "id")
+    rows = {}   # last run wins per id
+    for r in load_jsonl("tests/results.jsonl"):
+        if r.get("status") == "ok" and r.get("curve"):
+            rows[r["id"]] = r
+
+    groups = {}
+    for pid, r in rows.items():
+        fam = (proposals.get(pid) or {}).get("task_family") or "(no family)"
+        groups.setdefault(fam, []).append((pid, r))
+
+    parts = ["<h2>Training curves</h2>",
+             "<p class='desc'>Per-epoch trajectory embedded by train.py: "
+             "val_acc (blue) and train_loss (orange), each self-scaled. "
+             "Runs started before curve capture have no entry.</p>"]
+    if not groups:
+        parts.append("<p class='muted'>No runs with curve data yet.</p>")
+    for fam in sorted(groups):
+        parts.append(f"<h3>{esc(fam)}</h3><table><thead><tr>"
+                     "<th>Proposal</th><th>Dataset</th><th>Params</th>"
+                     "<th>Final val acc</th><th>val_acc / epoch</th>"
+                     "<th>train_loss / epoch</th><th>Epochs</th></tr></thead><tbody>")
+        for pid, r in sorted(groups[fam], key=lambda kv: -(kv[1].get("val_acc") or 0)):
+            model = ((proposals.get(pid) or {}).get("spec") or {}).get("model", "-")
+            link = f"<a href='/proposal/{esc(pid)}'>{esc(pid)}</a>"
+            parts.append(
+                "<tr>"
+                f"<td>{link}<br><span class='muted'>{esc(model)}</span></td>"
+                f"<td>{esc(str(r.get('declared_dataset')))}</td>"
+                f"<td>{r.get('param_count', '-')}</td>"
+                f"<td>{r.get('val_acc', '-')}</td>"
+                f"<td>{_sparkline(r['curve'], 'val_acc')}</td>"
+                f"<td>{_sparkline(r['curve'], 'train_loss', color='#ff9f43')}</td>"
+                f"<td>{len(r['curve'])}</td>"
+                "</tr>")
+        parts.append("</tbody></table>")
+    return "Training curves", "".join(parts)
+
+
+
 # ---------------------------------------------------------------------------
 # HTTP handler
 # ---------------------------------------------------------------------------
@@ -979,6 +1059,8 @@ class Handler(BaseHTTPRequestHandler):
                 title, body = page_smoke()
             elif path == "/models":
                 title, body = page_models()
+            elif path == "/curves":
+                title, body = page_curves()
             elif path == "/mnist":
                 title, body = page_mnist()
             elif path.startswith("/family/"):

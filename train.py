@@ -218,7 +218,7 @@ def train(pid, epochs=None, batch_size=None, lr=None, optimizer=None):
 
     augment = spec.get("augment", False)
     augment_kwargs = spec.get("augment_kwargs", {})
-    train_dl, val_dl = datasets.get_dataloader(dataset, batch_size=batch_size, augment=augment, augment_kwargs=augment_kwargs)
+    train_dl, val_dl = datasets.get_dataloader(dataset, batch_size=batch_size, augment=augment, augment_kwargs=augment_kwargs, max_chars=spec.get("max_chars"))
     opt = opt_cls(model.parameters(), lr=lr, **opt_kwargs)
     opt_lr = opt.defaults["lr"]
 
@@ -276,11 +276,14 @@ def train(pid, epochs=None, batch_size=None, lr=None, optimizer=None):
     start = time.time()
     n_batches = len(train_dl)
     gstep = 0
+    curve = []  # per-epoch training trajectory, embedded in the results row
     for ep in range(epochs):
         model.train()
         running_loss = 0.0
+        running_correct, running_seen = 0, 0
         for bi, (x, y) in enumerate(train_dl, 1):
             x, y = x.to(device), y.to(device)
+            out = None
             if is_lbfgs:
                 # LBFGS handles zero_grad internally in its closure calls.
                 loss = opt.step(make_closure(x, y))
@@ -299,18 +302,41 @@ def train(pid, epochs=None, batch_size=None, lr=None, optimizer=None):
             _apply_scheduler(gstep)
             gstep += 1
             running_loss += (loss.item() if torch.is_tensor(loss) else 0.0)
+            if out is not None:
+                # Running batch accuracy (approximate; same convention as
+                # evaluate(): per-token for 3-D text-gen output, else per-sample).
+                if out.dim() == 3:
+                    running_correct += (out.argmax(1) == y).sum().item()
+                    running_seen += y.numel()
+                else:
+                    running_correct += (out.argmax(1) == y).sum().item()
+                    running_seen += y.size(0)
             # Live batch progress (carriage-return overwrite, no external deps).
             print(f"\r[{pid}] epoch {ep + 1}/{epochs}  "
                   f"batch {bi}/{n_batches}  loss={loss.item():.4f}",
                   end="", flush=True)
         avg_loss = running_loss / max(n_batches, 1)
+        train_acc_ep = running_correct / max(running_seen, 1)
+        # Per-epoch validation snapshot (pure observation: eval() under
+        # no_grad does not touch BN running stats or the training RNG streams).
+        val_loss_e, val_acc_e = evaluate(model, val_dl, device, loss_fn=loss_fn)
         elapsed = time.time() - start
+        cur_lr = opt.param_groups[0]["lr"]
+        curve.append({
+            "epoch": ep + 1,
+            "train_loss": round(avg_loss, 4),
+            "train_acc": round(train_acc_ep, 4),
+            "val_loss": round(val_loss_e, 4),
+            "val_acc": round(val_acc_e, 4),
+            "lr": round(cur_lr, 8),
+            "t": round(elapsed, 1),
+        })
         # Epoch summary line (newline so the next epoch starts clean).
         print(f"\r[{pid}] epoch {ep + 1}/{epochs}  done  "
-              f"avg_train_loss={avg_loss:.4f}  elapsed={elapsed:.1f}s",
+              f"avg_train_loss={avg_loss:.4f}  train_acc={train_acc_ep:.4f}  "
+              f"val_acc={val_acc_e:.4f}  lr={cur_lr:.2e}  elapsed={elapsed:.1f}s",
               flush=True)
     train_time_s = time.time() - start
-
     val_loss, val_acc = evaluate(model, val_dl, device, loss_fn=loss_fn)
     # approximate train loss from the last train step is unreliable; report val.
     # Re-run a quick train-set eval for a train_loss estimate.
@@ -342,6 +368,9 @@ def train(pid, epochs=None, batch_size=None, lr=None, optimizer=None):
         "batch": batch_size,
         "loss": loss_name,
         "scheduler": sched_fn.__name__ if sched_fn is not None else "constant",
+        # Per-epoch training trajectory: {epoch, train_loss, train_acc,
+        # val_loss, val_acc, lr, t(cumulative seconds)}.
+        "curve": curve,
     }
 
     with open(RESULTS, "a", encoding="utf-8") as fh:

@@ -30,13 +30,6 @@ import time
 import torch
 import torch.nn.functional as F
 
-import build_model
-import datasets
-import optimizers
-import losses
-import schedulers
-import initializers
-import regularizations
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = HERE if os.path.exists(os.path.join(HERE, "proposals.jsonl")) else os.path.dirname(HERE)
@@ -313,7 +306,7 @@ def train(pid, epochs=None, batch_size=None, lr=None, optimizer=None):
                     running_seen += y.size(0)
             # Live batch progress (carriage-return overwrite, no external deps).
             print(f"\r[{pid}] epoch {ep + 1}/{epochs}  "
-                  f"batch {bi}/{n_batches}  loss={loss.item():.4f}",
+                  f"batch {bi}/{n_batches}  loss={loss.item():.4f} train_acc={running_correct / max(running_seen, 1):.4f}",
                   end="", flush=True)
         avg_loss = running_loss / max(n_batches, 1)
         train_acc_ep = running_correct / max(running_seen, 1)

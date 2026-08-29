@@ -104,6 +104,11 @@ class SwiGLU(nn.Module):
         return F.silu(self.u(x)) * self.v(x)
 
 
+
+@register("hardtanh")
+def _hardtanh(in_ch):
+    return nn.Hardtanh()
+
 def make(name, in_ch):
     """Resolve an activation NAME -> module. Raises on unknown name."""
     if name not in REGISTRY:

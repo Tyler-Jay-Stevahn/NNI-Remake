@@ -412,6 +412,9 @@ def _block(block: dict, in_ch: int):
         return nn.ReLU(), in_ch
     if t == "maxpool2d":
         return nn.MaxPool2d(block.get("kernel", 2), block.get("stride", 2)), in_ch
+    if t == "adaptiveavgpool2d":
+        return nn.AdaptiveAvgPool2d(block["output_size"]), in_ch
+
     if t == "avgpool2d":
         return nn.AvgPool2d(block.get("kernel", 2), block.get("stride", 2)), in_ch
     if t == "flatten":
@@ -542,6 +545,23 @@ def _make_head(feat_out: torch.Tensor, spec: dict) -> nn.Module:
             nn.AdaptiveAvgPool2d(1), nn.Flatten(),
             nn.Linear(feat_out.shape[1], 256), nn.ReLU(),
             ActorCriticHead(256, n_out))
+    elif spec.get("head") == "gap+mlp":
+        # Global Average Pooling + MLP head
+        layers += [nn.AdaptiveAvgPool2d(1), nn.Flatten()]
+        # Add MLP layers from head_layers or use default [256] -> n_out
+        mlp_layers = spec.get("head_layers", [256])
+        prev_dim = dim
+        for hidden_dim in mlp_layers:
+            if isinstance(hidden_dim, float):
+                # Handle dropout rate
+                layers.append(nn.Dropout(hidden_dim))
+            else:
+                layers.append(nn.Linear(prev_dim, hidden_dim))
+                layers.append(nn.ReLU())
+                prev_dim = hidden_dim
+        # Final layer to n_out
+        layers.append(nn.Linear(prev_dim, n_out))
+
     elif spec.get("head") == "lm_head":
         # Language-modeling head for text-gen: project each position's
         # channel vector to a vocab-sized logit, keeping the full (B, T) sequence
@@ -549,7 +569,6 @@ def _make_head(feat_out: torch.Tensor, spec: dict) -> nn.Module:
         # one). feat_out is (B, C, T); output is (B, n_out, T).
         if feat_out.dim() != 3:
             raise ValueError("lm_head requires a 3-D (B, C, T) feature map")
-        return nn.Conv1d(feat_out.shape[1], n_out, 1)
     else:
         layers.append(nn.Linear(dim, n_out))
     return nn.Sequential(*layers)
